@@ -7,11 +7,28 @@ python er_main.py --mem_size 20 --mask_trick --n_runs 5
 gives
 
 ```
-valid:
-final accuracy: [0.38 0.12 0.33 0.45 0.55]
-average: 0.37
-final forgetting: [0.44 0.4  0.19 0.19 0.  ]
-average: 0.3
+Final valid Accuracy: 0.382 +/- 0.017
+Final valid Forget: 0.292 +/- 0.037
 ```
 
- 
+
+```
+python er_main.py --mem_size 50 --mask_trick --n_runs 5
+```
+
+gives 
+
+```
+Final valid Accuracy: 0.416 +/- 0.022
+Final valid Forget: 0.232 +/- 0.022
+```
+
+```
+python er_main.py --mem_size 100 --mask_trick --n_runs 5
+```
+
+```
+Final valid Accuracy: 0.464 +/- 0.017
+Final valid Forget: 0.192 +/- 0.025
+```
+
