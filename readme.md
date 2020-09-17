@@ -35,5 +35,5 @@ Final valid Forget: 0.172 +/- 0.018
 1. concatenating incoming and rehearsal batches really degrades performance here (at least for M=20)
 2. what about using `exclude_task` ? It you *do* exclude tasks, the model performs really bad on the incoming tasks. Like very bad. Maybe this suggests that the only learning occuring is on the buffered samples. 
 3. If we train *only* on the buffer (except for 1st task), model does really bad on all tasks, and okay-ish on last one. 
-3. batch size = `5` also slightly degrades performance.  Actually maybe not. 
+3. batch size = `5` seems to be almost as good
 x. if we interpret the setup as an extreme class imbalance scenario, could we track an EMA of last seen classes and weight samples according to the inverse frequencies ?
