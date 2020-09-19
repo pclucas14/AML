@@ -31,6 +31,21 @@ Final valid Accuracy: 0.470 +/- 0.012
 Final valid Forget: 0.172 +/- 0.018
 ```
 
+```
+python er_main.py --mem_size 20 --n_runs 20 --dataset miniimagenet --disc_iters 3
+
+Final valid Accuracy: 0.103 +/- 0.004
+Final valid Forget: 0.481 +/- 0.006
+
+
+python er_main.py --mem_size 20 --mask_trick --n_runs 20 --dataset miniimagenet --disc_iters 3
+
+Final valid Accuracy: 0.183 +/- 0.003
+Final valid Forget: 0.171 +/- 0.006
+
+```
+
+
 ### Notes
 1. concatenating incoming and rehearsal batches really degrades performance here (at least for M=20)
 2. what about using `exclude_task` ? It you *do* exclude tasks, the model performs really bad on the incoming tasks. Like very bad. Maybe this suggests that the only learning occuring is on the buffered samples. 
