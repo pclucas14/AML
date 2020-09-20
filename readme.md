@@ -92,5 +92,6 @@ Final valid Accuracy: 0.500 +/- 0.042
 Final valid Forget: 0.376 +/- 0.049
 
 (excluding tasks)
-
+Final valid Accuracy: 0.460 +/- 0.034
+Final valid Forget: 0.146 +/- 0.034
 ```
