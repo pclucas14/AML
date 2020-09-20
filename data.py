@@ -189,12 +189,15 @@ def get_split_mnist(args):
 def get_split_cifar10(args):
     # assert args.n_tasks in [5, 10], 'SplitCifar only works with 5 or 10 tasks'
     assert '1.' in str(torch.__version__)[:2], 'Use Pytorch 1.x!'
-    args.n_tasks   = 5
+
+    if args.n_tasks == -1:
+        args.n_tasks   = 5
+
     args.n_classes = 10
     args.buffer_size = args.n_tasks * args.mem_size * 2
     args.multiple_heads = False
     args.use_conv = True
-    args.n_classes_per_task = 2
+    args.n_classes_per_task = args.n_classes // args.n_tasks
     args.input_size = [3, 32, 32]
     args.input_type = 'continuous'
     # because data is between [-1,1]:
@@ -244,7 +247,7 @@ def get_split_cifar10(args):
     test_idx  = [0] + [x + 1 for x in sorted(test_idx)]
 
     train_ds, test_ds = [], []
-    skip = 10 // 5 #args.n_tasks
+    skip = args.n_classes_per_task
     for i in range(0, 10, skip):
         tr_s, tr_e = train_idx[i], train_idx[i + skip]
         te_s, te_e = test_idx[i],  test_idx[i + skip]
@@ -263,14 +266,17 @@ def get_split_cifar10(args):
 def get_miniimagenet(args):
     ROOT_PATH = '/home/eugene//data/filelists/miniImagenet/materials/images'
     ROOT_PATH_CSV = '/home/eugene//data/filelists/miniImagenet/materials'
+    ROOT_PATH = '/private/home/lucaspc/repos/datasets/miniimagenet/images'
+    ROOT_PATH_CSV = '/private/home/lucaspc/repos/datasets/miniimagenet/splits'
+
+    if args.n_tasks == -1:
+        args.n_tasks = 20
 
     args.use_conv = True
-    args.n_tasks   = 20
     args.n_classes = 100
     args.multiple_heads = False
-    args.n_classes_per_task = 5
+    args.n_classes_per_task = args.n_classes // args.n_tasks
     args.input_size = (3, 84, 84)
-
     def get_data(setname):
         csv_path = os.path.join(ROOT_PATH_CSV, setname + '.csv')
         lines = [x.strip() for x in open(csv_path, 'r').readlines()][1:]
@@ -339,14 +345,9 @@ def get_miniimagenet(args):
             test_ds  += [current_test]
             current_train, current_test = None, None
 
-    # TODO: remove this
-    ## Facebook actually does 17 tasks (3 to CV)
-    #train_ds = train_ds[:17]
-    #test_ds  = test_ds[:17]
-
     # build masks
     masks = []
-    task_ids = [None for _ in range(20)]
+    task_ids = [None for _ in range(args.n_tasks)]
     for task, task_data in enumerate(train_ds):
         labels = np.unique(task_data[1]) #task_data[1].unique().long()
         assert labels.shape[0] == args.n_classes_per_task
@@ -354,6 +355,7 @@ def get_miniimagenet(args):
         mask[labels] = 1
         masks += [mask]
         task_ids[task] = labels
+
 
     task_ids = torch.from_numpy(np.stack(task_ids)).to(args.device).long()
 
