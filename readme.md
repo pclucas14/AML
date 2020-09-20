@@ -78,4 +78,7 @@ no masking
 ```
 python er_main.py --mem_size 100 --mask_trick --n_runs 5 --n_tasks 1
 Final valid Accuracy: 0.638 +/- 0.010
+
+python er_main.py --mem_size 0 --mask_trick --n_runs 5 --n_tasks 1
+Final valid Accuracy: 0.578 +/- 0.029
 ```
