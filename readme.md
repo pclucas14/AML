@@ -101,4 +101,8 @@ Final valid Forget: 0.146 +/- 0.034
 
 python er_main.py --mem_size 100 --n_runs 5 --dataset miniimagenet --n_tasks 1 --task_free --disc_iters 1
 Final valid Accuracy: 0.242 +/- 0.010
+
+python er_main.py --mem_size 100 --n_runs 5 --dataset miniimagenet --n_tasks 1 --task_free --disc_iters 3
+Final valid Accuracy: 0.280 +/- 0.013
+
 ```
