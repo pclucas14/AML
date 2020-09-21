@@ -91,8 +91,8 @@ Final valid Forget: 0.130 +/- 0.01
 
 python er_main.py --mem_size 500  --n_runs 5
 (no excluding tasks) : 
-Final valid Accuracy: 0.500 +/- 0.042
-Final valid Forget: 0.376 +/- 0.049
+Final valid Accuracy: 0.505 +/- 0.019
+Final valid Forget: 0.356 +/- 0.028
 
 (excluding tasks)
 Final valid Accuracy: 0.460 +/- 0.034
