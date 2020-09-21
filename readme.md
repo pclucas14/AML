@@ -95,8 +95,8 @@ Final valid Accuracy: 0.505 +/- 0.019
 Final valid Forget: 0.356 +/- 0.028
 
 (excluding tasks)
-Final valid Accuracy: 0.460 +/- 0.034
-Final valid Forget: 0.146 +/- 0.034
+Final valid Accuracy: 0.456 +/- 0.023
+Final valid Forget: 0.186 +/- 0.031
 
 
 python er_main.py --mem_size 100 --n_runs 5 --dataset miniimagenet --n_tasks 1 --task_free --disc_iters 1
