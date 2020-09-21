@@ -85,9 +85,9 @@ Final valid Accuracy: 0.578 +/- 0.029
 python er_main.py --mem_size 500  --n_runs 5 --n_tasks 1 --task_free
 Final valid Accuracy: 0.710 +/- 0.006
 
-python er_main.py --mem_size 500 --mask_trick --n_runs 5
-Final valid Accuracy: 0.560 +/- 0.020
-Final valid Forget: 0.112 +/- 0.026
+python er_main.py --mem_size 500 --mask_trick --n_runs 20
+Final valid Accuracy: 0.536 +/- 0.015
+Final valid Forget: 0.130 +/- 0.01
 
 python er_main.py --mem_size 500  --n_runs 5
 (no excluding tasks) : 
