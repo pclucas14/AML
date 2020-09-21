@@ -105,4 +105,12 @@ Final valid Accuracy: 0.242 +/- 0.010
 python er_main.py --mem_size 100 --n_runs 5 --dataset miniimagenet --n_tasks 1 --task_free --disc_iters 3
 Final valid Accuracy: 0.280 +/- 0.013
 
+python er_main.py --mem_size 100 --n_runs 5 --dataset miniimagenet --task_free --disc_iters
+Final valid Accuracy: 0.246 +/- 0.018
+Final valid Forget: 0.324 +/- 0.021
+
+python er_main.py --mem_size 100 --n_runs 5 --dataset miniimagenet --task_free --disc_iters 3 --mask_trick
+Final valid Accuracy: 0.238 +/- 0.010
+Final valid Forget: 0.104 +/- 0.012
+
 ```
