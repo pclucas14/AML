@@ -120,4 +120,11 @@ Final valid Forget: 0.297 +/- 0.009
 python er_main.py --mem_size 500 --n_runs 20 --dataset miniimagenet --task_free --disc_iters 3 --mask_trick
 Final valid Accuracy: 0.268 +/- 0.007
 Final valid Forget: 0.097 +/- 0.006
-```
+
+
+
+RESULTS Eugene
+Fancy trick cifar --mem_size 10 --n_runs 20
+Final valid Accuracy: 0.415 +/- 0.008
+Final valid Forget: 0.240 +/- 0.016
+
