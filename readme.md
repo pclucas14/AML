@@ -124,7 +124,7 @@ Final valid Forget: 0.097 +/- 0.006
 
 
 RESULTS Eugene
-Fancy trick cifar --mem_size 10 --n_runs 20
+Fancy trick cifar --mem_size 20 --n_runs 20
 Final valid Accuracy: 0.415 +/- 0.008
 Final valid Forget: 0.240 +/- 0.016
 
