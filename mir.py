@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from utils import get_grad_vector, get_future_step_parameters
-from VAE.loss import calculate_loss
+
 
 #----------
 # Functions
