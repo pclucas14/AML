@@ -109,6 +109,208 @@ def get_permuted_mnist(args):
 
     return train_ds, val_ds, test_ds
 
+def get_split_cifar100(args):
+    # assert args.n_tasks in [5, 10], 'SplitCifar only works with 5 or 10 tasks'
+    assert '1.' in str(torch.__version__)[:2], 'Use Pytorch 1.x!'
+   # args.n_tasks   = 17
+    args.n_tasks=20
+    #args.multiple_heads = True
+    args.multiple_heads = False
+    args.n_classes = 100
+    args.n_classes_per_task = 5
+    args.input_size = [3, 32, 32]
+    args.input_type = 'continuous'
+
+    # fetch MNIST
+
+    train = datasets.CIFAR100('../cl-pytorch/data/', train=True,  download=True)
+    test  = datasets.CIFAR100('../cl-pytorch/data/', train=False, download=True)
+
+    try:
+        train_x, train_y = train.data, train.targets
+        test_x, test_y = test.data, test.targets
+    except:
+        train_x, train_y = train.train_data, train.train_labels
+        test_x, test_y = test.test_data, test.test_labels
+
+
+    if args.method == 'iid_baseline':
+        train_x = torch.Tensor(train_x).permute(0, 3, 1, 2).contiguous()
+        test_x = torch.Tensor(test_x).permute(0, 3, 1, 2).contiguous()
+        train_y = torch.Tensor(train_y)
+        test_y = torch.Tensor(test_y)
+        return XYDataset(train_x,train_y, **{'source':'cifar100'}),\
+               XYDataset(test_x,test_y,  **{'source':'cifar100'})
+    # sort according to the label
+    out_train = [
+        (x,y) for (x,y) in sorted(zip(train_x, train_y), key=lambda v : v[1]) ]
+
+    out_test = [
+        (x,y) for (x,y) in sorted(zip(test_x, test_y), key=lambda v : v[1]) ]
+
+    train_x, train_y = [
+            np.stack([elem[i] for elem in out_train]) for i in [0,1] ]
+
+    test_x,  test_y  = [
+            np.stack([elem[i] for elem in out_test]) for i in [0,1] ]
+
+    train_x = torch.Tensor(train_x).permute(0, 3, 1, 2).contiguous()
+    test_x  = torch.Tensor(test_x).permute(0, 3, 1, 2).contiguous()
+
+    train_y = torch.Tensor(train_y)
+    test_y  = torch.Tensor(test_y)
+
+    # get indices of class split
+    train_idx = [((train_y + i) % 100).argmax() for i in range(100)]
+    train_idx = [0] + [x + 1 for x in sorted(train_idx)]
+
+    test_idx  = [((test_y + i) % 100).argmax() for i in range(100)]
+    test_idx  = [0] + [x + 1 for x in sorted(test_idx)]
+
+    train_ds, test_ds = [], []
+    skip = 1 # get all classes individually first
+    for i in range(0, 100):
+        tr_s, tr_e = train_idx[i], train_idx[i + skip]
+        te_s, te_e = test_idx[i],  test_idx[i + skip]
+
+        train_ds += [(train_x[tr_s:tr_e], train_y[tr_s:tr_e])]
+        test_ds  += [(test_x[te_s:te_e],  test_y[te_s:te_e])]
+
+    # next we randomly partition the dataset
+    indices = [x for x in range(100)]
+
+    # TODO: check this
+    # shuffle(indices)
+
+    train_classes = [train_ds[indices[i]] for i in range(100)]
+    test_classes  = [test_ds[indices[i]]  for i in range(100)]
+
+    train_ds, test_ds = [], []
+
+    skip = args.n_classes_per_task
+    for i in range(0, 100, skip):
+        train_task_ds, test_task_ds = [[], []], [[], []]
+        for j in range(skip):
+            train_task_ds[0] += [train_classes[i + j][0]]
+            train_task_ds[1] += [train_classes[i + j][1]]
+            test_task_ds[0]  += [test_classes[i + j][0]]
+            test_task_ds[1]  += [test_classes[i + j][1]]
+
+        train_ds += [(torch.cat(train_task_ds[0]), torch.cat(train_task_ds[1]))]
+        test_ds  += [(torch.cat(test_task_ds[0]), torch.cat(test_task_ds[1]))]
+
+    if False:
+        # TODO: remove this
+        # Facebook actually does 17 tasks (3 to CV)
+        if args.validation:
+            train_ds = train_ds[17:]
+            test_ds = test_ds[17:]
+            task_ran = 3
+        else:
+            train_ds = train_ds[:17]
+            test_ds  = test_ds[:17]
+            task_ran = 17
+    train_ds = train_ds[:20]
+    test_ds = test_ds[:20]
+    # build masks
+    masks = []
+    task_ran=20
+    task_ids = [None for _ in range(task_ran)]
+    for task, task_data in enumerate(train_ds):
+        labels = task_data[1].unique().long()
+        assert labels.shape[0] == args.n_classes_per_task
+       # import ipdb; ipdb.set_trace()
+        mask = torch.zeros(args.n_classes) #.to(args.device)
+        mask[labels] = 1
+        masks += [mask]
+        task_ids[task] = labels
+    task_ids = torch.stack(task_ids).to(args.device)
+    #task_ids = torch.stack(task_ids).long()to(args.device).long()
+    train_ds, val_ds = make_valid_from_train(train_ds)
+
+    train_ds = map(lambda x, y : XYDataset(x[0], x[1], **{'source':'cifar100', 'mask':y,'task_ids':task_ids}), train_ds, masks)
+    test_ds  = map(lambda x, y : XYDataset(x[0], x[1], **{'source':'cifar100', 'mask':y,'task_ids':task_ids}), test_ds, masks)
+    val_ds = map(lambda x, y : XYDataset(x[0], x[1], **{'source':'cifar100', 'mask':y,'task_ids':task_ids,}), val_ds, masks)
+
+    return train_ds, val_ds, test_ds
+
+""" Split CIFAR10 into 5 tasks {{0,1}, ... {8,9}} """
+def get_imagenet32(args):
+    from imagenet32 import Imagenet32
+    # assert args.n_tasks in [5, 10], 'SplitCifar only works with 5 or 10 tasks'
+    assert '1.' in str(torch.__version__)[:2], 'Use Pytorch 1.x!'
+    args.n_tasks   = 500
+    args.n_classes = 1000
+    args.buffer_size = args.n_tasks * args.mem_size * 2
+  #  args.multiple_heads = False
+    args.use_conv = True
+    args.n_classes_per_task = 2
+    args.input_size = [3, 32, 32]
+    args.input_type = 'continuous'
+    # because data is between [-1,1]:
+    assert args.output_loss is not 'bernouilli'
+    if args.output_loss == None:
+        #TODO(multinomial is broken)
+        #args.output_loss = 'multinomial'
+        args.output_loss = 'mse'
+
+
+    # fetch MNIST
+    train =  Imagenet32('data/imagenet32/out_data_train', train=True)
+    test  = Imagenet32('data/imagenet32/out_data_val', train=False)
+
+    try:
+        train_x, train_y = train.data, train.targets
+        test_x, test_y = test.data, test.targets
+    except:
+        train_x, train_y = train.train_data, train.train_labels
+        test_x,  test_y  = test.test_data,   test.test_labels
+
+    # sort according to the label
+    out_train = [
+        (x,y) for (x,y) in sorted(zip(train_x, train_y), key=lambda v : v[1]) ]
+
+    out_test = [
+        (x,y) for (x,y) in sorted(zip(test_x, test_y), key=lambda v : v[1]) ]
+
+    train_x, train_y = [
+            np.stack([elem[i] for elem in out_train]) for i in [0,1] ]
+
+    test_x,  test_y  = [
+            np.stack([elem[i] for elem in out_test]) for i in [0,1] ]
+
+
+    train_x = torch.from_numpy(train_x).permute(0, 3, 1, 2).contiguous()
+    test_x  = torch.from_numpy(test_x).permute(0, 3, 1, 2).contiguous()
+
+    train_y = torch.Tensor(train_y)
+    test_y  = torch.Tensor(test_y)
+
+    # get indices of class split
+    train_idx = [((train_y + i) % args.n_classes).argmax() for i in range(args.n_classes)]
+    train_idx = [0] + [x + 1 for x in sorted(train_idx)]
+
+    test_idx  = [((test_y + i) % args.n_classes).argmax() for i in range(args.n_classes)]
+    test_idx  = [0] + [x + 1 for x in sorted(test_idx)]
+
+    train_ds, test_ds = [], []
+    skip =  int(args.n_classes/args.n_tasks) #args.n_tasks
+    for i in range(0, 1000, skip):
+        tr_s, tr_e = train_idx[i], train_idx[i + skip]
+        te_s, te_e = test_idx[i],  test_idx[i + skip]
+
+        train_ds += [(train_x[tr_s:tr_e], train_y[tr_s:tr_e])]
+        test_ds  += [(test_x[te_s:te_e],  test_y[te_s:te_e])]
+
+
+
+    train_ds, val_ds = make_valid_from_train(train_ds)
+
+    train_ds = map(lambda x : XYDataset(x[0], x[1], **{'source':'imagenet32'}), train_ds)
+    val_ds   = map(lambda x : XYDataset(x[0], x[1], **{'source':'imagenet32'}), val_ds)
+    test_ds  = map(lambda x : XYDataset(x[0], x[1], **{'source':'imagenet32'}), test_ds)
+    return train_ds, val_ds, test_ds
+
 """ Split MNIST into 5 tasks {{0,1}, ... {8,9}} """
 def get_split_mnist(args):
     args.multiple_heads = False
@@ -252,11 +454,24 @@ def get_split_cifar10(args):
         train_ds += [(train_x[tr_s:tr_e], train_y[tr_s:tr_e])]
         test_ds  += [(test_x[te_s:te_e],  test_y[te_s:te_e])]
 
+    masks = []
+    task_ran = 5
+    task_ids = [None for _ in range(task_ran)]
+    for task, task_data in enumerate(train_ds):
+        labels = task_data[1].unique().long()
+        assert labels.shape[0] == args.n_classes_per_task
+        # import ipdb; ipdb.set_trace()
+        mask = torch.zeros(args.n_classes)  # .to(args.device)
+        mask[labels] = 1
+        masks += [mask]
+        task_ids[task] = labels
+    task_ids = torch.stack(task_ids).to(args.device)
+
     train_ds, val_ds = make_valid_from_train(train_ds)
 
-    train_ds = map(lambda x : XYDataset(x[0], x[1], **{'source':'cifar10'}), train_ds)
-    val_ds   = map(lambda x : XYDataset(x[0], x[1], **{'source':'cifar10'}), val_ds)
-    test_ds  = map(lambda x : XYDataset(x[0], x[1], **{'source':'cifar10'}), test_ds)
+    train_ds = map(lambda x, y : XYDataset(x[0], x[1], **{'source':'cifar10','mask':y,'task_ids':task_ids}), train_ds, masks)
+    val_ds   = map(lambda x, y : XYDataset(x[0], x[1], **{'source':'cifar10','mask':y,'task_ids':task_ids}), val_ds, masks)
+    test_ds  = map(lambda x, y : XYDataset(x[0], x[1], **{'source':'cifar10','mask':y,'task_ids':task_ids}), test_ds,masks)
 
     return train_ds, val_ds, test_ds
 
@@ -382,3 +597,93 @@ def make_valid_from_train(dataset, cut=0.95):
         val_ds += [(x_val, y_val)]
 
     return tr_ds, val_ds
+
+
+
+""" Split CIFAR10 into 5 tasks {{0,1}, ... {8,9}} """
+def get_split_cifar10_unb(args):
+    # assert args.n_tasks in [5, 10], 'SplitCifar only works with 5 or 10 tasks'
+    assert '1.' in str(torch.__version__)[:2], 'Use Pytorch 1.x!'
+    args.n_tasks   = 5
+    args.n_classes = 10
+    args.buffer_size = args.n_tasks * args.mem_size * 2
+    args.multiple_heads = False
+    args.use_conv = True
+    args.n_classes_per_task = 2
+    args.input_size = [3, 32, 32]
+    args.input_type = 'continuous'
+    # because data is between [-1,1]:
+    assert args.output_loss is not 'bernouilli'
+    if args.output_loss == None:
+        #TODO(multinomial is broken)
+        #args.output_loss = 'multinomial'
+        args.output_loss = 'mse'
+        print('\nsetting output loss to MSE')
+
+
+    # fetch MNIST
+    train = datasets.CIFAR10('Data/', train=True,  download=True)
+    test  = datasets.CIFAR10('Data/', train=False, download=True)
+
+    try:
+        train_x, train_y = train.data, train.targets
+        test_x, test_y = test.data, test.targets
+    except:
+        train_x, train_y = train.train_data, train.train_labels
+        test_x,  test_y  = test.test_data,   test.test_labels
+
+    # sort according to the label
+    out_train = [
+        (x,y) for (x,y) in sorted(zip(train_x, train_y), key=lambda v : v[1]) ]
+
+    out_test = [
+        (x,y) for (x,y) in sorted(zip(test_x, test_y), key=lambda v : v[1]) ]
+
+    train_x, train_y = [
+            np.stack([elem[i] for elem in out_train]) for i in [0,1] ]
+
+    test_x,  test_y  = [
+            np.stack([elem[i] for elem in out_test]) for i in [0,1] ]
+
+    train_x = torch.Tensor(train_x).permute(0, 3, 1, 2).contiguous()
+    test_x  = torch.Tensor(test_x).permute(0, 3, 1, 2).contiguous()
+
+    train_y = torch.Tensor(train_y)
+    test_y  = torch.Tensor(test_y)
+
+    # get indices of class split
+    train_idx = [((train_y + i) % 10).argmax() for i in range(10)]
+    train_idx = [0] + [x + 1 for x in sorted(train_idx)]
+
+    test_idx  = [((test_y + i) % 10).argmax() for i in range(10)]
+    test_idx  = [0] + [x + 1 for x in sorted(test_idx)]
+
+    train_ds, test_ds = [], []
+    skip = 10 // 5 #args.n_tasks
+    for i in range(0, 10, skip):
+        tr_s, tr_e = train_idx[i], train_idx[i + skip]
+        te_s, te_e = test_idx[i],  test_idx[i + skip]
+
+        train_ds += [(train_x[tr_s:tr_e], train_y[tr_s:tr_e])]
+        test_ds  += [(test_x[te_s:te_e],  test_y[te_s:te_e])]
+
+    masks = []
+    task_ran = 5
+    task_ids = [None for _ in range(task_ran)]
+    for task, task_data in enumerate(train_ds):
+        labels = task_data[1].unique().long()
+        assert labels.shape[0] == args.n_classes_per_task
+        # import ipdb; ipdb.set_trace()
+        mask = torch.zeros(args.n_classes)  # .to(args.device)
+        mask[labels] = 1
+        masks += [mask]
+        task_ids[task] = labels
+    task_ids = torch.stack(task_ids).to(args.device)
+
+    train_ds, val_ds = make_valid_from_train(train_ds)
+
+    train_ds = map(lambda x, y : XYDataset(x[0], x[1], **{'source':'cifar10','mask':y,'task_ids':task_ids}), train_ds, masks)
+    val_ds   = map(lambda x, y : XYDataset(x[0], x[1], **{'source':'cifar10','mask':y,'task_ids':task_ids}), val_ds, masks)
+    test_ds  = map(lambda x, y : XYDataset(x[0], x[1], **{'source':'cifar10','mask':y,'task_ids':task_ids}), test_ds,masks)
+
+    return train_ds, val_ds, test_ds

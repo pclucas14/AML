@@ -37,12 +37,14 @@ class Buffer(nn.Module):
         by = torch.LongTensor(buffer_size).fill_(0)
         bt = torch.LongTensor(buffer_size).fill_(0)
         logits = torch.FloatTensor(buffer_size, args.n_classes).fill_(0)
+        use = torch.FloatTensor(buffer_size).fill_(1)
 
         if args.cuda:
             bx = bx.to(args.device)
             by = by.to(args.device)
             bt = bt.to(args.device)
             logits = logits.to(args.device)
+            use = use.to(args.device)
 
         self.current_index = 0
         self.n_seen_so_far = 0
@@ -53,6 +55,7 @@ class Buffer(nn.Module):
         self.register_buffer('by', by)
         self.register_buffer('bt', bt)
         self.register_buffer('logits', logits)
+        self.register_buffer('use', use)
 
         self.to_one_hot  = lambda x : x.new(x.size(0), args.n_classes).fill_(0).scatter_(1, x.unsqueeze(1), 1)
         self.arange_like = lambda x : torch.arange(x.size(0)).to(x.device)
@@ -181,13 +184,16 @@ class Buffer(nn.Module):
         self.by = self.by[:remove_after_this_idx]
         self.br = self.bt[:remove_after_this_idx]
 
-    def sample(self, amt, exclude_task = None, ret_ind = False):
+    def sample(self, amt, exclude_task = None, ret_ind = False,reset=False):
         if exclude_task is not None:
             valid_indices = (self.t != exclude_task)
             valid_indices = valid_indices.nonzero().squeeze()
             bx, by, bt = self.bx[valid_indices], self.by[valid_indices], self.bt[valid_indices]
         else:
             bx, by, bt = self.bx[:self.current_index], self.by[:self.current_index], self.bt[:self.current_index]
+
+        if reset:
+            self.use = torch.FloatTensor(self.bx.size(0)).fill_(1)
 
         if bx.size(0) < amt:
             if ret_ind:
@@ -196,9 +202,19 @@ class Buffer(nn.Module):
                 return bx, by, bt
         else:
             indices = torch.from_numpy(np.random.choice(bx.size(0), amt, replace=False))
+            if False:
+                proba = self.use
+                proba = proba * 1.0 / proba.sum()
+                random_gen = torch.distributions.categorical.Categorical(probs=proba)
+                indices = torch.LongTensor([random_gen.sample().item() for _ in range(amt)])
+
 
             if self.args.cuda:
                 indices = indices.to(self.args.device)
+
+
+
+            self.use[indices]+=1
 
             if ret_ind:
                 return bx[indices], by[indices], bt[indices], indices
