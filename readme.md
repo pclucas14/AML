@@ -128,3 +128,30 @@ Fancy trick cifar --mem_size 20 --n_runs 20
 Final valid Accuracy: 0.415 +/- 0.008
 Final valid Forget: 0.240 +/- 0.016
 
+
+
+Fancy trick + top layers only
+
+------------------------------------------
+
+
+
+M=20 , niter 1, runs=3
+-----------------------------------
+Final valid Accuracy: 0.457 +/- 0.014
+Final valid Forget: 0.313 +/- 0.011
+Final valid final_last_task_acc: 0.707
+Final valid final_allbutfirst_tasks_acc: 0.388
+
+
+
+M=100, niter 3 runs=1
+---------------------
+Final valid Accuracy: 0.550 +/- 0.000
+Final valid Forget: 0.230 +/- 0.000
+
+
+Final valid final_last_task_acc: 0.716
+Final valid final_allbutfirst_tasks_acc: 0.500
+
+
