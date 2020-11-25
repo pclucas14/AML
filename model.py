@@ -127,7 +127,7 @@ class ResNet(nn.Module):
 
         # hardcoded for now
         last_hid = nf * 8 * block.expansion if input_size[1] in [8,16,21,32,42] else 640
-        self.linear = nn.Linear(last_hid, num_classes)
+        self.linear = distLinear(last_hid,num_classes)#nn.Linear(last_hid, num_classes)
 
         self.activation = nn.ReLU()
 

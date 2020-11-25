@@ -11,7 +11,7 @@ from utils  import get_logger, get_temp_logger, logging_per_task
 from buffer import Buffer
 from copy   import deepcopy
 from pydoc  import locate
-from model  import ResNet18,normalize
+from model_aux  import ResNet18
 from utils import SelectiveBackPropagation,naive_cross_entropy_loss, onehot, FocalLoss
 import copy
 # Arguments
@@ -136,10 +136,12 @@ def eval_model(model, loader, task, mode='valid'):
             if args.cuda:
                 data, target = data.to(args.device), target.to(args.device)
 
-            logits = model(data)
+            logits, _ = model(data, n=num - 1, upto=True)
 
             if args.multiple_heads:
                 logits = logits.masked_fill(te_loader.dataset.mask == 0, -1e9)
+
+
 
             loss = F.cross_entropy(logits, target)
             pred = logits.argmax(dim=1, keepdim=True)
@@ -178,7 +180,8 @@ for run in range(args.n_runs):
         torch.backends.cudnn.benchmark = False
 
     # CLASSIFIER
-    model = ResNet18(args.n_classes, nf=20, input_size=args.input_size)
+    num=4
+    model = ResNet18(args.n_classes, nf=20, split_points=num, input_size=args.input_size)
     if args.cuda:
         model = model.to(args.device)
     model.train()
@@ -216,7 +219,6 @@ for run in range(args.n_runs):
         sample_amt = 0
 
         model = model.train()
-        print(model.linear.L.weight.data)
        # import ipdb; ipdb.set_trace()
         old_class_mask = deepcopy(mask_so_far)
         #---------------
@@ -256,91 +258,28 @@ for run in range(args.n_runs):
                 else:
                     rehearse = (task + i) > 0 if args.task_free else task > 0
 
+                opt.zero_grad()
 
+                present = target.unique()
 
-                hidden = model.return_hidden(data)
-
-                if args.mask_trick:
-                    # mask logits not present in batch
-                    present = target.unique()
-                    if mask_so_far is not None:
-                        mask_so_far = torch.cat([mask_so_far,present]).unique()
-                    else:
-                        mask_so_far = present
-
-                    mask = torch.zeros(args.batch_size, args.n_classes)
-                    if args.mask_vers==2:
-                        mask[:,present]=1
-                        logits[:,present]
-                        m=torch.zeros(args.n_classes).byte()
-                        m[present]=1
-                        m2=torch.zeros(args.n_classes).byte()
-                        m2[mask_so_far]=1
-                        m[~m2]=1
-                        if task>0:
-                            w=1./class_count[~m]
-                            w=0.3*float(len(mask_so_far)-len(present))*w/w.sum()
-                          #  import ipdb; ipdb.set_trace()
-                            logits[:,~m] = logits[:,~m]*w[None,:]
-                            mask2 = torch.zeros_like(logits)
-                            mask2[:,mask_so_far] = 1
-                            logits = logits.masked_fill(mask2 == 0, -1e9)
-                        else:
-                            logits=logits.masked_fill(mask==0,-1e9)
-                        #logits=logits*mask.float()+(1.-mask.float())*logits/50.
-
-                        loss_a = F.cross_entropy(logits, target, reduction='none')
-                        loss = ((loss_a).sum() / loss_a.size(0)) * (1. / float(it + 1.))
-                        for z in range(len(target)):
-                            class_count[target[z]]+=1
-                    elif args.mask_vers ==3 and task>0:
-                        mask = torch.zeros_like(logits)
-                        
-                        for i,z in enumerate(range(len(target))):
-                            mask[i,target[z]]=1
-                        logit_p = logits[mask.byte()].view(1,-1)
-                        med = model.linear.L.weight.detach().data[0:present.min().item()].mean(dim=0)
-                        model.eval()
-                        hidden = model.return_hidden(data)
-                      #  import ipdb; ipdb.set_trace()
-                        logit_n = torch.mm(hidden,med.unsqueeze(1)).view(1,-1)
-                        model.train()
-                        logit_c = torch.cat([logit_p,logit_n]).permute(1,0)
-                        target_temp = torch.ones(len(target)).long().to(args.device)
-                       # import ipdb; ipdb.set_trace()
-                        loss = F.cross_entropy(logit_c, target_temp)
-                        #loss = -logits[mask.byte()].mean()
-                      #  log_probabilities = -logits[target]
-                    elif args.mask_vers == 4:
-
-                        if task==0:
-                            logits = model.linear(hidden)
-                            loss = F.cross_entropy(logits, target)
-                        else:
-                            logits = model.linear(hidden)
-                           # import ipdb; ipdb.set_trace()
-                            loss=0
-                            for k in range(len(logits)):
-                                loss+=torch.min(logits[k,target[k]],torch.tensor(1.2).cuda())
-                            loss = -0.5*loss/float(len(logits))
-                      #  loss += F.cross_entropy(logits, target)
-                    else:
-                        mask[:,present]=1
-                        mask=mask.cuda()
-
-                        mask[:,mask_so_far.max().item():args.n_classes]=1
-
-                       # import ipdb;ipdb.set_trace()
-                        #lin_fixed = deepcopy(model.linear).cuda()
-                        #lin_fixed.requires_grad = False
-                        #logits_fix = lin_fixed(hidden)
-                        logits = model.linear(hidden)
-
-
-                        #logits=logits.masked_fill(mask==0,-1e9)
-                        loss = F.cross_entropy(logits.masked_fill(mask==0,-1e9) , target)
+                if mask_so_far is not None:
+                    mask_so_far = torch.cat([mask_so_far,present]).unique()
                 else:
-                    loss = F.cross_entropy(logits, target)
+                    mask_so_far = present
+
+                mask = torch.zeros(args.batch_size, args.n_classes)
+                mask[:,present]=1
+                mask=mask.cuda()
+
+                #logits=logits.masked_fill(mask==0,-1e9)
+                #loss = F.cross_entropy(logits.masked_fill(mask==0,-1e9) , target)
+                representation = data
+                loss = 0
+                for n in range(num):
+                    logits, representation = model(representation, n=n)
+                    if task>0 and n>1 and args.mask_trick:
+                        logits = logits.masked_fill(mask == 0, -1e9)
+                    loss += ((1.0+n)/float(num))*F.cross_entropy(logits, target)
 
 
                 opt.zero_grad()
@@ -353,35 +292,23 @@ for run in range(args.n_runs):
                 if rehearse:
                     mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size,ret_ind=True,reset=task) # , exclude_task=task)
 
-                    hidden = model.return_hidden(mem_x)
-                    logits_buffer = model.linear(hidden)
-                    #if task>0:
-                     #   max_conf_seen_for_seen = F.softmax(logits_buffer, dim=1)[:, tr_loader.dataset.mask.byte()].max(dim=1)[0].mean()
-                    if args.mask_trick:
-                        present = mask_so_far
-                        mask = torch.zeros_like(logits_buffer)
-                        mask[:, present] = 1
-                        logits_buffer = logits_buffer.masked_fill(mask == 0, -1e9)
+                    representation = mem_x
+                    loss = 0
+                    for n in range(num):
+                        logits_buffer, representation = model(representation, n=n)
+
+                        if args.mask_trick:
+                            present = mask_so_far
+                            mask = torch.zeros_like(logits_buffer)
+                            mask[:, present] = 1
+                            logits_buffer = logits_buffer.masked_fill(mask == 0, -1e9)
+
+                        loss += ((1.0+n)/float(num))*F.cross_entropy(logits_buffer, mem_y)
 
 
-                    loss_a = F.cross_entropy(logits_buffer, mem_y, reduction='none')
-                    #loss = fc_loss(logits_buffer,mem_y)
-                    loss = (loss_a).sum() / loss_a.size(0)
-                    #loss2 = 0
-                    #for k in range(len(logits_buffer)):
-                    #    loss2 += logits_buffer[k, mem_y[k]]
-                   # loss += -0.1 * loss2 / float(len(logits_buffer))
-
-                 #   import ipdb; ipdb.set_trace()
-
-                    #ms = buffer.dist_amt[inds[:, np.newaxis], inds[np.newaxis]]==0
-                    #loss2 = (mat[ms]- buffer.dist_mat[inds[:,np.newaxis],inds[np.newaxis]][ms]).mean()
-                    #loss += loss2*0.5
                     loss.backward()
-                 #   buffer.dist_mat[inds[:, np.newaxis], inds[np.newaxis]] = buffer.dist_mat[inds[:, np.newaxis], inds[np.newaxis]] * 0.2+ 0.8* mat.detach().data.cuda()
-                  #  buffer.dist_amt[inds[:, np.newaxis], inds[np.newaxis]] += 1
 
-                model(data)
+             #   model(data,num-1,upto=True)
 
                # print(list(model.linear.parameters()))
                 opt.step()

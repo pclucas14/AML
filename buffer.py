@@ -4,6 +4,7 @@ import pdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms as transforms
 
 class Buffer(nn.Module):
     def __init__(self, args, input_size=None):
@@ -39,16 +40,22 @@ class Buffer(nn.Module):
         logits = torch.FloatTensor(buffer_size, args.n_classes).fill_(0)
         use = torch.FloatTensor(buffer_size).fill_(1)
 
+        dist_mat = torch.FloatTensor(buffer_size, buffer_size).fill_(-1)
+        dist_amt = torch.FloatTensor(buffer_size, buffer_size).fill_(0)
+
         if args.cuda:
             bx = bx.to(args.device)
             by = by.to(args.device)
             bt = bt.to(args.device)
             logits = logits.to(args.device)
             use = use.to(args.device)
+            dist_mat.to(args.device)
+            dist_amt.to(args.device)
 
         self.current_index = 0
         self.n_seen_so_far = 0
         self.is_full       = 0
+        self.device = args.device
 
         # registering as buffer allows us to save the object using `torch.save`
         self.register_buffer('bx', bx)
@@ -56,6 +63,9 @@ class Buffer(nn.Module):
         self.register_buffer('bt', bt)
         self.register_buffer('logits', logits)
         self.register_buffer('use', use)
+
+        self.register_buffer('dist_mat',dist_mat)
+        self.register_buffer('dist_amt', dist_amt)
 
         self.to_one_hot  = lambda x : x.new(x.size(0), args.n_classes).fill_(0).scatter_(1, x.unsqueeze(1), 1)
         self.arange_like = lambda x : torch.arange(x.size(0)).to(x.device)
@@ -146,6 +156,11 @@ class Buffer(nn.Module):
         self.by[idx_buffer] = y[idx_new_data]
         self.bt[idx_buffer] = t
 
+        self.dist_amt[idx_buffer , :] = 0
+        self.dist_amt[: , idx_buffer] = 0
+        self.dist_mat[idx_buffer , :] = 0
+        self.dist_mat[: , idx_buffer] = 0
+
         if save_logits:
             self.logits[idx_buffer] = logits[idx_new_data]
 
@@ -184,7 +199,7 @@ class Buffer(nn.Module):
         self.by = self.by[:remove_after_this_idx]
         self.br = self.bt[:remove_after_this_idx]
 
-    def sample(self, amt, exclude_task = None, ret_ind = False,reset=False):
+    def sample(self, amt, exclude_task = None, ret_ind = False,reset=False, aug=False):
         if exclude_task is not None:
             valid_indices = (self.t != exclude_task)
             valid_indices = valid_indices.nonzero().squeeze()
@@ -216,10 +231,23 @@ class Buffer(nn.Module):
 
             self.use[indices]+=1
 
-            if ret_ind:
-                return bx[indices], by[indices], bt[indices], indices
+            if aug:
+                # this is sort of wrong cause its already normalized
+                # needs to be fixed somehow (unnormalized and renormanlized in th e end?>)
+                transform = transforms.Compose(
+                            [transforms.ToPILImage(),
+                             transforms.RandomCrop(32, padding=4),
+                             transforms.RandomHorizontalFlip(),
+                             transforms.ToTensor()])
+
+                ret = torch.stack([transform(image.cpu())
+                                          for image in bx[indices]]).to(self.device)
             else:
-                return bx[indices], by[indices], bt[indices]
+                ret = bx[indices]
+            if ret_ind:
+                return ret, by[indices], bt[indices], indices
+            else:
+                return ret, by[indices], bt[indices]
 
     def split(self, amt):
         indices = torch.randperm(self.current_index).to(self.args.device)
