@@ -12,7 +12,7 @@ from buffer import Buffer
 from copy   import deepcopy
 from pydoc  import locate
 from model  import ResNet18,normalize, ContrastiveLoss
-from utils import SelectiveBackPropagation,naive_cross_entropy_loss, onehot, FocalLoss
+from utils import naive_cross_entropy_loss, onehot, Lookahead, AverageMeter
 import copy
 # Arguments
 # -----------------------------------------------------------------------------------------
@@ -82,7 +82,6 @@ args.device = 'cuda:0'
 # argument validation
 overlap = 0
 
-fc_loss = FocalLoss(1.0)
 #########################################
 # TODO(Get rid of this or move to data.py)
 args.ignore_mask = False
@@ -164,6 +163,8 @@ def eval_model(model, loader, task, mode='valid'):
         wandb.log({mode + '_anytime_last_acc_' + str(run): LOG[run][mode]['acc'][task, task]})
 
 
+hid_new_change=AverageMeter()
+hid_old_change=AverageMeter()
 # Train the model
 # -----------------------------------------------------------------------------------------
 
@@ -182,23 +183,6 @@ for run in range(args.n_runs):
     if args.cuda:
         model = model.to(args.device)
     model.train()
-
-
-    sb = SelectiveBackPropagation(
-        args.buffer_batch_size,
-        epoch_length=500,
-        loss_selection_threshold=False)
-
-    sb2 = SelectiveBackPropagation(
-        args.batch_size,
-        epoch_length=500,
-        loss_selection_threshold=False)
-
-    if args.ema:
-        EMAS = []
-        # for n_step in [1, 10, 50]:
-        for decay in [0.99]:#, 0.9, 0.99, 0.999]:
-            EMAS += [EMA(gamma=decay, update_freq=3)]
 
     opt = torch.optim.SGD(model.parameters(), lr=args.lr)
     buffer = Buffer(args)
@@ -251,6 +235,7 @@ for run in range(args.n_runs):
                     #model.linear.weight.data[tr_loader.dataset.mask.byte(), :] = (scaling / torch.norm(curr, dim=1).unsqueeze(1)) * curr
             #---------------
             # Iteration Loop
+            target_orig= copy.deepcopy(target)
             for it in range(args.disc_iters):
                 if args.method == 'no_rehearsal':
                     rehearse = False
@@ -258,12 +243,18 @@ for run in range(args.n_runs):
                     rehearse = (task + i) > 0 if args.task_free else task > 0
 
                 if rehearse:
-                    mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, ret_ind=True,
-                                                           reset=task)  # , exclude_task=task)
+                    if it==0:
+                        mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, ret_ind=True,
+                                                               reset=task)  # , exclude_task=task)
                     hidden_buff = model.return_hidden(mem_x)
 
-
+                target = copy.deepcopy(target_orig)
                 hidden = model.return_hidden(data)
+                if False and it>0:
+                    temp = np.arange(0,len(target))
+                    np.random.shuffle(temp)
+                    hidden=hidden[temp[:-2]]
+                    target = target[temp[:-2]]
                 # mask logits not present in batch
                 present = target.unique()
                 woof = target.unique()
@@ -272,49 +263,61 @@ for run in range(args.n_runs):
                 else:
                     mask_so_far = present
 
-                mask = torch.zeros(args.batch_size, args.n_classes)
+                mask = torch.zeros(len(target), args.n_classes)
 
-                if task==0:
+                if args.mask_trick:
+                    present = target.unique()
+                    mask[:, present] = 1
+                    mask = mask.cuda()
                     logits = model.linear(hidden)
-                    loss = F.cross_entropy(logits, target)
+                    loss = F.cross_entropy(logits.masked_fill(mask==0,-1e9), target)
                 else:
-                    ind_neg = []
-                    anchor_pos = []
-                    p = np.arange(0, len(target))
-                    skip=False
-                    for t in target.unique():
-                        if (t == target).sum()<1: #this wont work with many classes + small batch size
-                            skip=True
+                    if task==0:
+                        logits = model.linear(hidden)
+                        loss = F.cross_entropy(logits, target)
+                    else:
+                        ind_neg = []
+                        anchor_pos = []
+                        p = np.arange(0, len(target))
+                        skip=False
+                        for t in target.unique():
+                            if (t == target).sum()<1: #this wont work with many classes + small batch size
+                                skip=True
+                                break
+                        if skip:
                             break
-                    if skip:
-                        break
-                    for j in range(len(target)):
-                        pos_target = target[j].item()
+                        for j in range(len(target)):
+                            pos_target = target[j].item()
 
-                        np.random.shuffle(p)
-                        neg_updated = False
-                        anc_updated = False
-                        for k in p:
-                            if k == j:
-                                continue
+                            np.random.shuffle(p)
+                            neg_updated = False
+                            anc_updated = False
+                            for k in p:
+                                if k == j:
+                                    continue
 
-                            if (not neg_updated) and target[k].item() != pos_target:
-                                ind_neg.append(k)
-                                neg_updated = True
+                                if (not neg_updated) and target[k].item() != pos_target:
+                                    ind_neg.append(k)
+                                    neg_updated = True
 
-                            if (not anc_updated) and target[k].item() == pos_target:
-                                anchor_pos.append(k)
-                                anc_updated = True
+                                if (not anc_updated) and target[k].item() == pos_target:
+                                    anchor_pos.append(k)
+                                    anc_updated = True
 
-                    hidden = normalize(hidden)
+                        hidden = normalize(hidden)
 
-                    if len(anchor_pos) != len(target) or len(ind_neg) != len(target):
-                        break
+                        if len(anchor_pos) != len(target) or len(ind_neg) != len(target):
+                            break
 
-                    loss = 2.0*F.triplet_margin_loss(hidden[anchor_pos], hidden, hidden[ind_neg], 0.2) \
-                           + 2.0*F.triplet_margin_loss(hidden[anchor_pos], hidden, hidden_buff[0:len(target)], 0.2)
+                        loss = 2.0*F.triplet_margin_loss(hidden[anchor_pos], hidden, hidden[ind_neg], 0.2) \
+                               + 0.0*F.triplet_margin_loss(hidden[anchor_pos], hidden, normalize(hidden_buff[0:len(target)]), 0.1) \
+                               #+ torch.norm(normalize(hidden_buff[0:len(target)]) - normalize(hidden_buff[0:len(target)]).detach())
 
-
+                        if it==0:
+                            orig_buff=hidden_buff[0:len(target)].detach()
+                        else:
+                            #loss+= 2.0*F.triplet_margin_loss(hidden[anchor_pos], hidden, normalize(hidden_buff[0:len(target)]), 0.1)
+                            loss+=torch.norm(hidden_buff-orig_buff)
 
                 opt.zero_grad()
                 loss.backward(retain_graph=True)
@@ -334,7 +337,23 @@ for run in range(args.n_runs):
                 model(data)
 
                 opt.step()
-            buffer.add_reservoir(data, target, None, task)
+
+                #####Just for debug
+                if False and task>0:
+                    if it==0:
+                        h1_store = copy.deepcopy(hidden.data.cpu())
+                        h_buff = copy.deepcopy(hidden_buff.data.cpu())
+                    model.eval()
+                    h1_store_after = model.return_hidden(data).data.cpu()
+                    h_buff_after = model.return_hidden(mem_x).data.cpu()
+                    hid_new_change.update(torch.norm(normalize(h1_store)-normalize(h1_store_after)).item())
+                    hid_old_change.update(torch.norm(normalize(h_buff)- normalize(h_buff_after)).item())
+                    print('task: '+str(task))
+                    print('new classes:' + str(hid_new_change.avg))
+                    print('old classes:' + str(hid_old_change.avg))
+                    model.train()
+                ######
+            buffer.add_reservoir(data, target_orig, None, task)
 
 
         eval_model(model, val_loader, task)

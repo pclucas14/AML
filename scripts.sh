@@ -19,6 +19,6 @@
 
 
 
-python er_main_contrastive.py --suffix 'baseline_mask' --lr 0.1 --dataset split_cifar10 --log online --mem_size 100  --mask_trick --disc_iters 3 --n_runs 1 --batch_size 10 --buffer_batch_size 10
+python er_main_contrastive.py --suffix 'baseline_mask' --lr 0.1 --dataset split_cifar10 --log online --mem_size 20   --disc_iters 1 --n_runs 1 --batch_size 10 --buffer_batch_size 10
 
 
