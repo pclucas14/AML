@@ -11,7 +11,7 @@ from utils  import get_logger, get_temp_logger, logging_per_task
 from buffer import Buffer
 from copy   import deepcopy
 from pydoc  import locate
-from model_aux  import ResNet18
+from model  import ResNet18,normalize, ContrastiveLoss
 from utils import SelectiveBackPropagation,naive_cross_entropy_loss, onehot, FocalLoss
 import copy
 # Arguments
@@ -50,7 +50,7 @@ parser.add_argument('--update_buffer_hid', type=int, default=1,
 # logging
 parser.add_argument('-l', '--log', type=str, default='off', choices=['off', 'online'],
     help='enable WandB logging')
-parser.add_argument('--wandb_project', type=str, default='er_depth_mask',
+parser.add_argument('--wandb_project', type=str, default='er_imbalance',
     help='name of the WandB project')
 parser.add_argument('--mask_vers', type=int, default=1)
 #------ MIR -----#
@@ -60,7 +60,6 @@ parser.add_argument('--compare_to_old_logits', action='store_true',help='uses ol
 parser.add_argument('--reuse_samples', type=int, default=0)
 parser.add_argument('--lr', type=float, default=0.1)
 
-parser.add_argument('--top_only', action='store_true')
 parser.add_argument('--task_free', action='store_true')
 parser.add_argument('--mask_trick', action='store_true')
 parser.add_argument('--grad_trick', action='store_true')
@@ -137,12 +136,10 @@ def eval_model(model, loader, task, mode='valid'):
             if args.cuda:
                 data, target = data.to(args.device), target.to(args.device)
 
-            logits, _ = model(data, n=num - 1, upto=True)
+            logits = model(data)
 
             if args.multiple_heads:
                 logits = logits.masked_fill(te_loader.dataset.mask == 0, -1e9)
-
-
 
             loss = F.cross_entropy(logits, target)
             pred = logits.argmax(dim=1, keepdim=True)
@@ -181,11 +178,27 @@ for run in range(args.n_runs):
         torch.backends.cudnn.benchmark = False
 
     # CLASSIFIER
-    num=4
-    model = ResNet18(args.n_classes, nf=20, split_points=num, input_size=args.input_size)
+    model = ResNet18(args.n_classes, nf=20, input_size=args.input_size)
     if args.cuda:
         model = model.to(args.device)
     model.train()
+
+
+    sb = SelectiveBackPropagation(
+        args.buffer_batch_size,
+        epoch_length=500,
+        loss_selection_threshold=False)
+
+    sb2 = SelectiveBackPropagation(
+        args.batch_size,
+        epoch_length=500,
+        loss_selection_threshold=False)
+
+    if args.ema:
+        EMAS = []
+        # for n_step in [1, 10, 50]:
+        for decay in [0.99]:#, 0.9, 0.99, 0.999]:
+            EMAS += [EMA(gamma=decay, update_freq=3)]
 
     opt = torch.optim.SGD(model.parameters(), lr=args.lr)
     buffer = Buffer(args)
@@ -201,6 +214,8 @@ for run in range(args.n_runs):
     # Task Loop
     for task, tr_loader in enumerate(train_loader):
         sample_amt = 0
+
+        contrastive = ContrastiveLoss(margin=0.6)
 
         model = model.train()
        # import ipdb; ipdb.set_trace()
@@ -222,7 +237,18 @@ for run in range(args.n_runs):
                 print('Run #{} Task #{} --> Train Classifier'.format(
                     run, task))
                 print('--------------------------------------\n')
-
+            if False and i==0:
+                if mask_so_far is not None:
+                    model.eval()
+                    un_t=target.unique()
+                    out = normalize(model.return_hidden(data)).detach().data
+                    for c in un_t:
+                        model.linear.L.weight.data[c] = out[target==c].mean()
+                    model.train()
+                  #  model.linear.requires_grad = False
+                    #scaling = torch.norm(model.linear.weight, dim=1)[mask_so_far].mean().detach().item()
+                    #curr = model.linear.weight[tr_loader.dataset.mask.byte(), :].detach()
+                    #model.linear.weight.data[tr_loader.dataset.mask.byte(), :] = (scaling / torch.norm(curr, dim=1).unsqueeze(1)) * curr
             #---------------
             # Iteration Loop
             for it in range(args.disc_iters):
@@ -231,69 +257,85 @@ for run in range(args.n_runs):
                 else:
                     rehearse = (task + i) > 0 if args.task_free else task > 0
 
-                opt.zero_grad()
+                if rehearse:
+                    mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, ret_ind=True,
+                                                           reset=task)  # , exclude_task=task)
+                    hidden_buff = model.return_hidden(mem_x)
 
+
+                hidden = model.return_hidden(data)
+                # mask logits not present in batch
                 present = target.unique()
-
+                woof = target.unique()
                 if mask_so_far is not None:
                     mask_so_far = torch.cat([mask_so_far,present]).unique()
                 else:
                     mask_so_far = present
 
                 mask = torch.zeros(args.batch_size, args.n_classes)
-                mask[:,present]=1
-                mask=mask.cuda()
-                mask[:, mask_so_far.max().item():args.n_classes] = 1
 
-                #logits=logits.masked_fill(mask==0,-1e9)
-                #loss = F.cross_entropy(logits.masked_fill(mask==0,-1e9) , target)
-                representation = data
-                loss = 0
-                for n in range(num):
-                    logits, representation = model(representation, n=n)
-                    if task>0 and n>1 and args.mask_trick:
-                        logits = logits.masked_fill(mask == 0, -1e9)
-                    if args.top_only:
-                        loss = F.cross_entropy(logits, target)
-                    else:
-                        loss += ((1.0+n)/float(num))*F.cross_entropy(logits, target) #
+                if task==0:
+                    logits = model.linear(hidden)
+                    loss = F.cross_entropy(logits, target)
+                else:
+                    ind_neg = []
+                    anchor_pos = []
+                    p = np.arange(0, len(target))
+                    skip=False
+                    for t in target.unique():
+                        if (t == target).sum()<1: #this wont work with many classes + small batch size
+                            skip=True
+                            break
+                    if skip:
+                        break
+                    for j in range(len(target)):
+                        pos_target = target[j].item()
+
+                        np.random.shuffle(p)
+                        neg_updated = False
+                        anc_updated = False
+                        for k in p:
+                            if k == j:
+                                continue
+
+                            if (not neg_updated) and target[k].item() != pos_target:
+                                ind_neg.append(k)
+                                neg_updated = True
+
+                            if (not anc_updated) and target[k].item() == pos_target:
+                                anchor_pos.append(k)
+                                anc_updated = True
+
+                    hidden = normalize(hidden)
+
+                    if len(anchor_pos) != len(target) or len(ind_neg) != len(target):
+                        break
+
+                    loss = 2.0*F.triplet_margin_loss(hidden[anchor_pos], hidden, hidden[ind_neg], 0.2) \
+                           + 2.0*F.triplet_margin_loss(hidden[anchor_pos], hidden, hidden_buff[0:len(target)], 0.2)
+
 
 
                 opt.zero_grad()
-                loss.backward()
-             #   if False and task>0:
-              #      for param in model.linear.parameters():
-               #         start = max(old_class_mask).item()
-                #        param.grad[start+1:]=0
+                loss.backward(retain_graph=True)
 
                 if rehearse:
-                    mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size,ret_ind=True,reset=task) # , exclude_task=task)
+                    logits_buffer = model.linear(hidden_buff)
+                    if args.mask_trick:
+                        present = mask_so_far
+                        mask = torch.zeros_like(logits_buffer)
+                        mask[:, present] = 1
+                        logits_buffer = logits_buffer.masked_fill(mask == 0, -1e9)
 
-                    representation = mem_x
-                    loss = 0
-                    for n in range(num):
-                        logits_buffer, representation = model(representation, n=n)
-
-                        if args.mask_trick:
-                            present = mask_so_far
-                            mask = torch.zeros_like(logits_buffer)
-                            mask[:, present] = 1
-                            logits_buffer = logits_buffer.masked_fill(mask == 0, -1e9)
-
-                        if args.top_only:
-                            loss = F.cross_entropy(logits_buffer, mem_y)
-                        else:
-                            loss += ((1.0+n)/float(num))*F.cross_entropy(logits_buffer, mem_y)
-                       # loss = F.cross_entropy(logits_buffer, mem_y)
-
-
+                    loss_a = F.cross_entropy(logits_buffer, mem_y, reduction='none')
+                    loss = (loss_a).sum() / loss_a.size(0)
                     loss.backward()
 
-             #   model(data,num-1,upto=True)
+                model(data)
 
-               # print(list(model.linear.parameters()))
                 opt.step()
             buffer.add_reservoir(data, target, None, task)
+
 
         eval_model(model, val_loader, task)
 

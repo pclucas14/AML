@@ -15,6 +15,31 @@ class identity(nn.Module):
     def forward(self, input):
         return input
 
+class distLinear(nn.Module):
+    def __init__(self, indim, outdim, weight=None, scale=5):
+        super(distLinear, self).__init__()
+        self.L = nn.Linear( indim, outdim, bias = False)
+        if weight is not None:
+            self.L.weight.data = Variable(weight)
+        self.class_wise_learnable_norm = False  #See the issue#4&8 in the github
+        if self.class_wise_learnable_norm:
+            WeightNorm.apply(self.L, 'weight', dim=0) #split the weight update component to direction and norm
+
+        if outdim <=200:
+            self.scale_factor = scale; #a fixed scale factor to scale the output of cos value into a reasonably large input for softmax
+        else:
+            self.scale_factor = 10; #in omniglot, a larger scale factor is required to handle >1000 output classes.
+
+    def forward(self, x):
+        x_norm = torch.norm(x, p=2, dim =1).unsqueeze(1).expand_as(x)
+        x_normalized = x.div(x_norm+ 0.00001)
+        if not self.class_wise_learnable_norm:
+            L_norm = torch.norm(self.L.weight.data, p=2, dim =1).unsqueeze(1).expand_as(self.L.weight.data)
+            self.L.weight.data = self.L.weight.data.div(L_norm + 0.00001)
+        cos_dist = self.L(x_normalized) #matrix product by forward function, but when using WeightNorm, this also multiply the cosine distance by a class-wise learnable norm, see the issue#4&8 in the github
+        scores = self.scale_factor * (cos_dist)
+
+        return scores
 
 class auxillary_classifier2(nn.Module):
     def __init__(self, feature_size=256,
@@ -75,7 +100,7 @@ class auxillary_classifier2(nn.Module):
 
         else:
             self.mlp = False
-            self.classifier = nn.Linear(feature_size*2*2, num_classes)
+            self.classifier = nn.Linear(feature_size*2*2, num_classes)#distLinear(feature_size*4,num_classes)#nn.Linear(feature_size*2*2, num_classes)
 
 
     def forward(self, x):
@@ -194,11 +219,11 @@ def conv1x1(in_planes, out_planes, stride=1):
 
 class ResNet_Modular(nn.Module):
 
-    def __init__(self, block, layers, num_classes=1000, nf=20, split_points=2, **kwargs):
+    def __init__(self, block, layers, num_classes=1000, nf=20, split_points=2, input_size=(1,32,32), **kwargs):
         super(ResNet_Modular, self).__init__()
         self.inplanes = nf*1
-        self.avg_size = 32
-        self.in_size = 32
+        self.avg_size = input_size[1]
+        self.in_size = input_size[1]
 
         self.blocks = nn.ModuleList([])
         self.base_blocks = nn.ModuleList([])
@@ -229,18 +254,21 @@ class ResNet_Modular(nn.Module):
             self.auxillary_nets.append(
                 auxillary_classifier2(in_size=in_size,
                                       n_lin=0, feature_size=planes,
-                                      input_features=planes, mlp_layers=0,
+                                      input_features=planes, mlp_layers=2,
                                       batchn=True, num_classes=num_classes)
             )
+            self.auxillary_nets[-1].classifier.scale_factor=5.0*(splits_id+1)/5.0
+            print(self.auxillary_nets[-1].classifier.scale_factor)
 
-        last_hid = nf * 8 * block.expansion
-        self.linear = nn.Linear(last_hid, num_classes)
+        last_hid = nf * 8  if input_size[1] in [8,16,21,32,42] else 640
+    #    self.linear = nn.Linear(last_hid, num_classes)
 
         self.auxillary_nets[len(self.auxillary_nets)-1] = nn.Sequential(
-            nn.AvgPool2d((4,4)),
-            View(last_hid * block.expansion),
-            nn.Linear(last_hid * block.expansion, num_classes)
-        )
+                nn.AvgPool2d((4,4)),
+                View(last_hid ),
+               # distLinear(last_hid * block.expansion, num_classes, scale=5.0)
+                nn.Linear(last_hid , num_classes)
+            )
 
         self.main_cnn = rep(self.blocks)
 
@@ -275,4 +303,5 @@ class ResNet_Modular(nn.Module):
         return outputs, representation
 
 def ResNet18(nclasses, nf=20, split_points=2, input_size=(3, 32, 32)):
-    return ResNet_Modular(BasicBlock, [2, 2, 2, 2], nclasses, nf, split_points=split_points)
+    return ResNet_Modular(BasicBlock, [2, 2, 2, 2], nclasses, nf,
+                          split_points=split_points, input_size=input_size)
