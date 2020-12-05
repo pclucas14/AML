@@ -71,9 +71,11 @@ class distLinear(nn.Module):
         x_norm = torch.norm(x, p=2, dim =1).unsqueeze(1).expand_as(x)
         x_normalized = x.div(x_norm+ 0.00001)
         if not self.class_wise_learnable_norm:
-            L_norm = torch.norm(self.L.weight.data, p=2, dim =1).unsqueeze(1).expand_as(self.L.weight.data)
-            self.L.weight.data = self.L.weight.data.div(L_norm + 0.00001)
-        cos_dist = self.L(x_normalized) #matrix product by forward function, but when using WeightNorm, this also multiply the cosine distance by a class-wise learnable norm, see the issue#4&8 in the github
+            L_norm = torch.norm(self.L.weight, p=2, dim =1).unsqueeze(1).expand_as(self.L.weight.data)
+            #self.L.weight = self.L.weight.div(L_norm + 0.00001)#.data = self.L.weight.data.div(L_norm + 0.00001)
+            cos_dist = torch.mm(x_normalized,self.L.weight.div(L_norm + 0.00001).transpose(0,1))
+        else:
+            cos_dist = self.L(x_normalized) #matrix product by forward function, but when using WeightNorm, this also multiply the cosine distance by a class-wise learnable norm, see the issue#4&8 in the github
         scores = self.scale_factor * (cos_dist)
 
         if torch.abs(cos_dist.max())>2.0:

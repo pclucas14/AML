@@ -62,7 +62,7 @@ parser.add_argument('--lr', type=float, default=0.1)
 
 parser.add_argument('--task_free', action='store_true')
 parser.add_argument('--mask_trick', action='store_true')
-parser.add_argument('--grad_trick', action='store_true')
+parser.add_argument('--prot_trick', action='store_true')
 parser.add_argument('--ema', action='store_true')
 
 args = parser.parse_args()
@@ -184,7 +184,9 @@ for run in range(args.n_runs):
         model = model.to(args.device)
     model.train()
 
-    opt = torch.optim.SGD(model.parameters(), lr=args.lr)
+    base_opt = torch.optim.SGD(model.parameters(), lr=args.lr)
+    opt = Lookahead(base_opt, k=args.disc_iters, alpha=0.5)  # Initialize Lookahead
+
     buffer = Buffer(args)
     if run == 0:
         print("number of classifier parameters:",
@@ -200,6 +202,13 @@ for run in range(args.n_runs):
         sample_amt = 0
 
         contrastive = ContrastiveLoss(margin=0.6)
+        if False and task>0:
+            w_dat = model.linear.L.weight.data
+            L_norm = torch.norm(w_dat,p=2,dim=1).unsqueeze(1).expand_as(w_dat)
+            w_dat = w_dat.div(L_norm + 0.00001)
+            #new_w = -w_dat[mask_so_far].mean(dim=0)
+            model.linear.L.weight.data[tr_loader.dataset.mask.byte()] = -w_dat[last_mask.byte()]
+        last_mask = tr_loader.dataset.mask
 
         model = model.train()
        # import ipdb; ipdb.set_trace()
@@ -245,7 +254,7 @@ for run in range(args.n_runs):
                 if rehearse:
                     if it==0:
                         mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, ret_ind=True,
-                                                               reset=task)  # , exclude_task=task)
+                                                               reset=task,aug=True) #,exclude_task=task)  # , exclude_task=task)
                     hidden_buff = model.return_hidden(mem_x)
 
                 target = copy.deepcopy(target_orig)
@@ -270,7 +279,8 @@ for run in range(args.n_runs):
                     mask[:, present] = 1
                     mask = mask.cuda()
                     logits = model.linear(hidden)
-                    loss = F.cross_entropy(logits.masked_fill(mask==0,-1e9), target)
+                    logits = logits.masked_fill(mask == 0, -1e9)
+                    loss = F.cross_entropy(logits, target)
                 else:
                     if task==0:
                         logits = model.linear(hidden)
@@ -278,46 +288,123 @@ for run in range(args.n_runs):
                     else:
                         ind_neg = []
                         anchor_pos = []
+                        select = []
                         p = np.arange(0, len(target))
+
+
                         skip=False
                         for t in target.unique():
-                            if (t == target).sum()<1: #this wont work with many classes + small batch size
+                            if (t == target).sum()==0: #this wont work with many classes + small batch size
                                 skip=True
                                 break
+
                         if skip:
                             break
+
+
                         for j in range(len(target)):
                             pos_target = target[j].item()
 
                             np.random.shuffle(p)
                             neg_updated = False
                             anc_updated = False
+                            neg = None
+                            anc = None
                             for k in p:
                                 if k == j:
                                     continue
 
                                 if (not neg_updated) and target[k].item() != pos_target:
-                                    ind_neg.append(k)
+                                    neg = k
                                     neg_updated = True
 
                                 if (not anc_updated) and target[k].item() == pos_target:
-                                    anchor_pos.append(k)
+                                    anc = k
                                     anc_updated = True
+                            if neg_updated and anc_updated:
+                                select.append(j)
+                                ind_neg.append(neg)
+                                anchor_pos.append(anc)
 
                         hidden = normalize(hidden)
 
-                        if len(anchor_pos) != len(target) or len(ind_neg) != len(target):
+                        ind2_neg = []
+                        anchor2_pos = []
+                        for j in range(len(target)):
+                            pos_target = target[j].item()
+
+                            np.random.shuffle(p)
+                            neg_buf_updated = False
+                            anc2_updated = False
+                            for k in p:
+                                if k == j:
+                                    continue
+
+                                if (not neg_buf_updated) and mem_y[k].item() != pos_target:
+                                    ind2_neg.append(k)
+                                    neg_buf_updated = True
+
+                                if (not anc2_updated) and target[k].item() == pos_target:
+                                    anchor2_pos.append(k)
+                                    anc2_updated = True
+
+                        if len(anchor_pos) != len(select) or len(ind_neg) != len(select):
+                          #  logits = model.linear(hidden)
+                           # loss = F.cross_entropy(logits, target)
+                            print('wiif')
                             break
 
-                        loss = 2.0*F.triplet_margin_loss(hidden[anchor_pos], hidden, hidden[ind_neg], 0.2) \
-                               + 0.0*F.triplet_margin_loss(hidden[anchor_pos], hidden, normalize(hidden_buff[0:len(target)]), 0.1) \
+                        loss = 2.0*F.triplet_margin_loss(hidden[select],hidden[anchor_pos], hidden[ind_neg], 0.2)
+
+                       # present = target.unique()
+                        #mask[:, present] = 1
+                        #mask = mask.cuda()
+                        #logits = model.linear(hidden)
+                        #logits = logits.masked_fill(mask == 0, -1e9)
+                        #loss += F.cross_entropy(logits, target)
+
+
+
+                        #loss2 = 0
+                        #for k in range(len(logits)):
+                         #   loss2 += logits[k, mem_y[k]]
+                        #loss += -0.5 * loss2 / float(len(logits)) / 5.0
+
+                        if len(anchor2_pos) != len(target) or len(ind2_neg) != len(target):
+                            break
+
+                        loss+= 0.0*F.triplet_margin_loss(hidden, hidden[anchor2_pos], normalize(hidden_buff[ind2_neg]).detach(), 0.1)
                                #+ torch.norm(normalize(hidden_buff[0:len(target)]) - normalize(hidden_buff[0:len(target)]).detach())
 
                         if it==0:
                             orig_buff=hidden_buff[0:len(target)].detach()
-                        else:
+                        #else:
                             #loss+= 2.0*F.triplet_margin_loss(hidden[anchor_pos], hidden, normalize(hidden_buff[0:len(target)]), 0.1)
-                            loss+=torch.norm(hidden_buff-orig_buff)
+                           # loss+=torch.norm(hidden_buff-orig_buff)
+
+                        #####Eval
+                        debug=False
+                        if debug:
+                            model.eval()
+                            all_logit=model(buffer.bx)/5.0
+                            all_class=buffer.by.unique()
+                            clases = target.unique()
+
+                            dist = model.linear(hidden)/5.0
+                            pred = dist.argmax(dim=1, keepdim=True).squeeze()
+                            for clas in all_class:
+
+
+                                if any(pred==clas):
+                                    print('class:' + str(clas.item()))
+                                    print('MISCLASSIFIED: max dist new misclassified to this class: ' + str(dist[pred==clas].max().item()))
+                                    print('avg dist sample to its class: ' + str(all_logit[buffer.by == clas].mean().item()))
+                                    print('std dist sample to its class: ' + str(all_logit[buffer.by == clas].std().item()))
+                                    print('max dist sample to its class: ' + str(all_logit[buffer.by == clas].max().item()))
+                            model.train()
+                      #  pause(0.2)
+                        #import ipdb; ipdb.set_trace()
+                        #####
 
                 opt.zero_grad()
                 loss.backward(retain_graph=True)
@@ -335,6 +422,10 @@ for run in range(args.n_runs):
                     loss.backward()
 
                 model(data)
+
+                if task>0 and False:
+                    for param in model.linear.parameters():
+                        param.grad[last_mask.byte()]=0
 
                 opt.step()
 

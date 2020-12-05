@@ -4,7 +4,8 @@ import pdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.transforms as transforms
+#import torchvision.transforms as transforms
+import kornia
 
 class Buffer(nn.Module):
     def __init__(self, args, input_size=None):
@@ -234,14 +235,23 @@ class Buffer(nn.Module):
             if aug:
                 # this is sort of wrong cause its already normalized
                 # needs to be fixed somehow (unnormalized and renormanlized in th e end?>)
-                transform = transforms.Compose(
-                            [transforms.ToPILImage(),
-                             transforms.RandomCrop(32, padding=4),
-                             transforms.RandomHorizontalFlip(),
-                             transforms.ToTensor()])
 
-                ret = torch.stack([transform(image.cpu())
-                                          for image in bx[indices]]).to(self.device)
+                if False:
+                    transform = transforms.Compose(
+                                [transforms.ToPILImage(),
+                                 transforms.RandomCrop(32, padding=4),
+                                 transforms.RandomHorizontalFlip(),
+                                 transforms.ToTensor()])
+
+                    ret = torch.stack([transform(image.cpu())
+                                              for image in bx[indices]]).to(self.device)
+
+
+                transform = nn.Sequential(
+                    kornia.augmentation.RandomCrop(size=(32,32),padding=4),
+                    kornia.augmentation.RandomHorizontalFlip()
+                )
+                ret = transform(bx[indices])
             else:
                 ret = bx[indices]
             if ret_ind:
