@@ -200,7 +200,7 @@ class Buffer(nn.Module):
         self.by = self.by[:remove_after_this_idx]
         self.br = self.bt[:remove_after_this_idx]
 
-    def sample(self, amt, exclude_task = None, ret_ind = False,reset=False, aug=False):
+    def sample(self, amt, exclude_task = None, ret_ind = False, aug=False):
         if exclude_task is not None:
             valid_indices = (self.t != exclude_task)
             valid_indices = valid_indices.nonzero().squeeze()
@@ -208,8 +208,6 @@ class Buffer(nn.Module):
         else:
             bx, by, bt = self.bx[:self.current_index], self.by[:self.current_index], self.bt[:self.current_index]
 
-        if reset:
-            self.use = torch.FloatTensor(self.bx.size(0)).fill_(1)
 
         if bx.size(0) < amt:
             if ret_ind:
@@ -218,11 +216,6 @@ class Buffer(nn.Module):
                 return bx, by, bt
         else:
             indices = torch.from_numpy(np.random.choice(bx.size(0), amt, replace=False))
-            if False:
-                proba = self.use
-                proba = proba * 1.0 / proba.sum()
-                random_gen = torch.distributions.categorical.Categorical(probs=proba)
-                indices = torch.LongTensor([random_gen.sample().item() for _ in range(amt)])
 
 
             if self.args.cuda:
@@ -235,17 +228,6 @@ class Buffer(nn.Module):
             if aug:
                 # this is sort of wrong cause its already normalized
                 # needs to be fixed somehow (unnormalized and renormanlized in th e end?>)
-
-                if False:
-                    transform = transforms.Compose(
-                                [transforms.ToPILImage(),
-                                 transforms.RandomCrop(32, padding=4),
-                                 transforms.RandomHorizontalFlip(),
-                                 transforms.ToTensor()])
-
-                    ret = torch.stack([transform(image.cpu())
-                                              for image in bx[indices]]).to(self.device)
-
 
                 transform = nn.Sequential(
                     kornia.augmentation.RandomCrop(size=(32,32),padding=4),

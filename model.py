@@ -66,6 +66,7 @@ class distLinear(nn.Module):
             self.scale_factor = 5; #a fixed scale factor to scale the output of cos value into a reasonably large input for softmax
         else:
             self.scale_factor = 10; #in omniglot, a larger scale factor is required to handle >1000 output classes.
+       # self.scale_factor = nn.Parameter(torch.tensor(0.5))
 
     def forward(self, x):
         x_norm = torch.norm(x, p=2, dim =1).unsqueeze(1).expand_as(x)

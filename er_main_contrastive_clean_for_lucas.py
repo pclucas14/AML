@@ -203,13 +203,6 @@ for run in range(args.n_runs):
 
         contrastive = ContrastiveLoss(margin=0.6)
 
-
-        if False and task>0:
-            w_dat = model.linear.L.weight.data
-            L_norm = torch.norm(w_dat,p=2,dim=1).unsqueeze(1).expand_as(w_dat)
-            w_dat = w_dat.div(L_norm + 0.00001)
-            #new_w = -w_dat[mask_so_far].mean(dim=0)
-            model.linear.L.weight.data[tr_loader.dataset.mask.byte()] = -w_dat[last_mask.byte()]
         last_mask = tr_loader.dataset.mask
 
         model = model.train()
@@ -232,18 +225,7 @@ for run in range(args.n_runs):
                 print('Run #{} Task #{} --> Train Classifier'.format(
                     run, task))
                 print('--------------------------------------\n')
-            if False and i==0:
-                if mask_so_far is not None:
-                    model.eval()
-                    un_t=target.unique()
-                    out = normalize(model.return_hidden(data)).detach().data
-                    for c in un_t:
-                        model.linear.L.weight.data[c] = out[target==c].mean()
-                    model.train()
-                  #  model.linear.requires_grad = False
-                    #scaling = torch.norm(model.linear.weight, dim=1)[mask_so_far].mean().detach().item()
-                    #curr = model.linear.weight[tr_loader.dataset.mask.byte(), :].detach()
-                    #model.linear.weight.data[tr_loader.dataset.mask.byte(), :] = (scaling / torch.norm(curr, dim=1).unsqueeze(1)) * curr
+
             #---------------
             # Iteration Loop
             target_orig= copy.deepcopy(target)
@@ -256,19 +238,13 @@ for run in range(args.n_runs):
                 if rehearse:
                     if it==0:
                         mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, ret_ind=True,
-                                                               reset=task,aug=False) #,exclude_task=task)  # , exclude_task=task)
+                                                               aug=False) #,exclude_task=task)  # , exclude_task=task)
                     hidden_buff = model.return_hidden(mem_x)
 
                 target = copy.deepcopy(target_orig)
                 hidden = model.return_hidden(data)
-                if False and it>0:
-                    temp = np.arange(0,len(target))
-                    np.random.shuffle(temp)
-                    hidden=hidden[temp[:-2]]
-                    target = target[temp[:-2]]
                 # mask logits not present in batch
                 present = target.unique()
-                woof = target.unique()
                 if mask_so_far is not None:
                     mask_so_far = torch.cat([mask_so_far,present]).unique()
                 else:
@@ -354,64 +330,16 @@ for run in range(args.n_runs):
                                     anc2_updated = True
 
                         if len(anchor_pos) != len(select) or len(ind_neg) != len(select):
-                          #  logits = model.linear(hidden)
-                           # loss = F.cross_entropy(logits, target)
                             print('wiif')
                             break
 
                         loss = 2.0*F.triplet_margin_loss(hidden[select],hidden[anchor_pos], hidden[ind_neg], 0.2)
 
-                       # present = target.unique()
-                        #mask[:, present] = 1
-                        #mask = mask.cuda()
-                        #logits = model.linear(hidden)
-                        #logits = logits.masked_fill(mask == 0, -1e9)
-                        #loss += F.cross_entropy(logits, target)
-
-
-
-                        #loss2 = 0
-                        #for k in range(len(logits)):
-                         #   loss2 += logits[k, mem_y[k]]
-                        #loss += -0.5 * loss2 / float(len(logits)) / 5.0
-
                         if len(anchor2_pos) != len(target) or len(ind2_neg) != len(target):
                             break
 
-                        if len(ind2_neg) != len(ind_neg):
-                            break
-                        loss+= 0.0*F.triplet_margin_loss(hidden, hidden[anchor2_pos], (normalize(hidden_buff[ind2_neg])+hidden[ind_neg])/2.0, 0.1)
-                               #+ torch.norm(normalize(hidden_buff[0:len(target)]) - normalize(hidden_buff[0:len(target)]).detach())
+                        loss+= 0.0*F.triplet_margin_loss(hidden, hidden[anchor2_pos], normalize(hidden_buff[ind2_neg]), 0.1)
 
-                        if it==0:
-                            orig_buff=hidden_buff[0:len(target)].detach()
-                        #else:
-                            #loss+= 2.0*F.triplet_margin_loss(hidden[anchor_pos], hidden, normalize(hidden_buff[0:len(target)]), 0.1)
-                           # loss+=torch.norm(hidden_buff-orig_buff)
-
-                        #####Eval
-                        debug=False
-                        if debug:
-                            model.eval()
-                            all_logit=model(buffer.bx)/5.0
-                            all_class=buffer.by.unique()
-                            clases = target.unique()
-
-                            dist = model.linear(hidden)/5.0
-                            pred = dist.argmax(dim=1, keepdim=True).squeeze()
-                            for clas in all_class:
-
-
-                                if any(pred==clas):
-                                    print('class:' + str(clas.item()))
-                                    print('MISCLASSIFIED: max dist new misclassified to this class: ' + str(dist[pred==clas].max().item()))
-                                    print('avg dist sample to its class: ' + str(all_logit[buffer.by == clas].mean().item()))
-                                    print('std dist sample to its class: ' + str(all_logit[buffer.by == clas].std().item()))
-                                    print('max dist sample to its class: ' + str(all_logit[buffer.by == clas].max().item()))
-                            model.train()
-                      #  pause(0.2)
-                        #import ipdb; ipdb.set_trace()
-                        #####
 
                 opt.zero_grad()
                 loss.backward(retain_graph=True)
@@ -429,28 +357,8 @@ for run in range(args.n_runs):
                     loss.backward()
 
                 model(data)
-
-                if task>0 and False:
-                    for param in model.linear.parameters():
-                        param.grad[last_mask.byte()]=0
-
                 opt.step()
 
-                #####Just for debug
-                if False and task>0:
-                    if it==0:
-                        h1_store = copy.deepcopy(hidden.data.cpu())
-                        h_buff = copy.deepcopy(hidden_buff.data.cpu())
-                    model.eval()
-                    h1_store_after = model.return_hidden(data).data.cpu()
-                    h_buff_after = model.return_hidden(mem_x).data.cpu()
-                    hid_new_change.update(torch.norm(normalize(h1_store)-normalize(h1_store_after)).item())
-                    hid_old_change.update(torch.norm(normalize(h_buff)- normalize(h_buff_after)).item())
-                    print('task: '+str(task))
-                    print('new classes:' + str(hid_new_change.avg))
-                    print('old classes:' + str(hid_old_change.avg))
-                    model.train()
-                ######
             buffer.add_reservoir(data, target_orig, None, task)
 
 
