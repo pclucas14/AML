@@ -186,8 +186,8 @@ for run in range(args.n_runs):
         model = model.to(args.device)
     model.train()
 
-    base_opt = torch.optim.SGD(model.parameters(), lr=args.lr)
-    opt = Lookahead(base_opt, k=args.disc_iters, alpha=0.5)  # Initialize Lookahead
+
+    opt = torch.optim.SGD(model.parameters(), lr=args.lr)
 
     buffer = Buffer(args)
     if run == 0:
@@ -254,93 +254,88 @@ for run in range(args.n_runs):
                 mask = torch.zeros(len(target), args.n_classes)
 
                 if args.mask_trick:
-                    present = target.unique()
-                    mask[:, present] = 1
+                    mask[:, mask_so_far] = 1
                     mask = mask.cuda()
                     logits = model.linear(hidden)
                     logits = logits.masked_fill(mask == 0, -1e9)
                     loss = F.cross_entropy(logits, target)
+                elif task == 0:
+                    logits = model.linear(hidden)
+                    loss = F.cross_entropy(logits, target)
                 else:
-                    if task==0:
-                        logits = model.linear(hidden)
-                        mask = torch.zeros_like(logits)
-                        mask[:, present] = 1
-                        logits = logits.masked_fill(mask == 0, -1e9)
-                        loss = F.cross_entropy(logits, target)
-                    else:
-                        ind_neg = []
-                        anchor_pos = []
-                        select = []
-                        p = np.arange(0, len(target))
+                    ind_neg = []
+                    anchor_pos = []
+                    select = []
+                    p = np.arange(0, len(target))
 
 
-                        skip=False
-                        for t in target.unique():
-                            if (t == target).sum()==0: #this wont work with many classes + small batch size
-                                skip=True
-                                break
-
-                        if skip:
+                    skip=False
+                    for t in target.unique():
+                        if (t == target).sum()==0: #this wont work with many classes + small batch size
+                            skip=True
                             break
 
-
-                        for j in range(len(target)):
-                            pos_target = target[j].item()
-
-                            np.random.shuffle(p)
-                            neg_updated = False
-                            anc_updated = False
-                            neg = None
-                            anc = None
-                            for k in p:
-                                if k == j:
-                                    continue
-
-                                if (not neg_updated) and target[k].item() != pos_target:
-                                    neg = k
-                                    neg_updated = True
-
-                                if (not anc_updated) and target[k].item() == pos_target:
-                                    anc = k
-                                    anc_updated = True
-                            if neg_updated and anc_updated:
-                                select.append(j)
-                                ind_neg.append(neg)
-                                anchor_pos.append(anc)
-
-                        hidden = normalize(hidden)
-
-                        ind2_neg = []
-                        anchor2_pos = []
-                        for j in range(len(target)):
-                            pos_target = target[j].item()
-
-                            np.random.shuffle(p)
-                            neg_buf_updated = False
-                            anc2_updated = False
-                            for k in p:
-                                if k == j:
-                                    continue
-
-                                if (not neg_buf_updated) and mem_y[k].item() != pos_target \
-                                        and mem_y[k].item() not in target.unique(): #make sure its not in the incoming
-                                    ind2_neg.append(k)
-                                    neg_buf_updated = True
-
-                                if (not anc2_updated) and target[k].item() == pos_target:
-                                    anchor2_pos.append(k)
-                                    anc2_updated = True
-
-                        if len(anchor_pos) != len(select) or len(ind_neg) != len(select):
-                            break
-
-                        loss = args.incoming_neg*F.triplet_margin_loss(hidden[select],hidden[anchor_pos], hidden[ind_neg], 0.2)
-
-                        if len(anchor2_pos) != len(target) or len(ind2_neg) != len(target):
-                            break
+                    if skip:
+                        break
 
 
-                        loss+= args.buffer_neg*F.triplet_margin_loss(hidden, hidden[anchor2_pos], normalize(hidden_buff[ind2_neg]), 0.2)
+                    for j in range(len(target)):
+                        pos_target = target[j].item()
+
+                        np.random.shuffle(p)
+                        neg_updated = False
+                        anc_updated = False
+                        neg = None
+                        anc = None
+                        for k in p:
+                            if k == j:
+                                continue
+
+                            if (not neg_updated) and target[k].item() != pos_target:
+                                neg = k
+                                neg_updated = True
+
+                            if (not anc_updated) and target[k].item() == pos_target:
+                                anc = k
+                                anc_updated = True
+                        if neg_updated and anc_updated:
+                            select.append(j)
+                            ind_neg.append(neg)
+                            anchor_pos.append(anc)
+
+                    hidden = normalize(hidden)
+
+                    ind2_neg = []
+                    anchor2_pos = []
+                    for j in range(len(target)):
+                        pos_target = target[j].item()
+
+                        np.random.shuffle(p)
+                        neg_buf_updated = False
+                        anc2_updated = False
+                        for k in p:
+                            if k == j:
+                                continue
+
+                            if (not neg_buf_updated) and mem_y[k].item() != pos_target \
+                                    and mem_y[k].item() not in target.unique(): #make sure its not in the incoming
+                                ind2_neg.append(k)
+                                neg_buf_updated = True
+
+                            if (not anc2_updated) and target[k].item() == pos_target:
+                                anchor2_pos.append(k)
+                                anc2_updated = True
+
+                    if len(anchor_pos) != len(select) or len(ind_neg) != len(select):
+                        break
+
+                    loss = args.incoming_neg*F.triplet_margin_loss(hidden[select],hidden[anchor_pos], hidden[ind_neg], 0.2)
+
+                    if len(anchor2_pos) != len(target) or len(ind2_neg) != len(target):
+                        break
+
+
+                    loss+= args.buffer_neg*F.triplet_margin_loss(hidden[select], hidden[anchor_pos], normalize(hidden_buff[ind2_neg][select]), 0.2)
 
 
                 opt.zero_grad()
@@ -348,11 +343,10 @@ for run in range(args.n_runs):
 
                 if rehearse:
                     logits_buffer = model.linear(hidden_buff)
-                    if args.mask_trick:
-                        present = mask_so_far
-                        mask = torch.zeros_like(logits_buffer)
-                        mask[:, present] = 1
-                        logits_buffer = logits_buffer.masked_fill(mask == 0, -1e9)
+                   # if args.mask_trick:
+                    mask = torch.zeros_like(logits_buffer)
+                    mask[:, mask_so_far] = 1
+                    logits_buffer = logits_buffer.masked_fill(mask == 0, -1e9)
 
                     loss_a = F.cross_entropy(logits_buffer, mem_y, reduction='none')
                     loss = (loss_a).sum() / loss_a.size(0)

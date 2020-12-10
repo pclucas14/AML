@@ -184,9 +184,7 @@ for run in range(args.n_runs):
         model = model.to(args.device)
     model.train()
 
-    base_opt = torch.optim.SGD(model.parameters(), lr=args.lr)
-    opt = Lookahead(base_opt, k=args.disc_iters, alpha=0.5)  # Initialize Lookahead
-
+    opt = torch.optim.SGD(model.parameters(), lr=args.lr)
     buffer = Buffer(args)
     if run == 0:
         print("number of classifier parameters:",
