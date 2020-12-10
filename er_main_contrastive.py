@@ -255,8 +255,7 @@ for run in range(args.n_runs):
 
                 if rehearse:
                     if it==0:
-                        mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, ret_ind=True,
-                                                               reset=task,aug=False) #,exclude_task=task)  # , exclude_task=task)
+                        mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, ret_ind=True,aug=False) #,exclude_task=task)  # , exclude_task=task)
                     hidden_buff = model.return_hidden(mem_x)
 
                 target = copy.deepcopy(target_orig)
@@ -378,9 +377,8 @@ for run in range(args.n_runs):
                         if len(anchor2_pos) != len(target) or len(ind2_neg) != len(target):
                             break
 
-                        if len(ind2_neg) != len(ind_neg):
-                            break
-                        loss+= 0.0*F.triplet_margin_loss(hidden, hidden[anchor2_pos], (normalize(hidden_buff[ind2_neg])+hidden[ind_neg])/2.0, 0.1)
+
+                        loss+= 2.0*F.triplet_margin_loss(hidden, hidden[anchor2_pos], normalize(hidden_buff[ind2_neg]), 0.1)
                                #+ torch.norm(normalize(hidden_buff[0:len(target)]) - normalize(hidden_buff[0:len(target)]).detach())
 
                         if it==0:

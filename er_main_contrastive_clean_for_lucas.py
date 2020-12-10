@@ -60,11 +60,13 @@ parser.add_argument('--compare_to_old_logits', action='store_true',help='uses ol
 parser.add_argument('--reuse_samples', type=int, default=0)
 parser.add_argument('--lr', type=float, default=0.1)
 
+parser.add_argument('--incoming_neg', type=float, default=2.0)
+parser.add_argument('--buffer_neg', type=float, default=2.0)
+
 parser.add_argument('--task_free', action='store_true')
 parser.add_argument('--mask_trick', action='store_true')
 parser.add_argument('--prot_trick', action='store_true')
 parser.add_argument('--ema', action='store_true')
-
 args = parser.parse_args()
 
 # Obligatory overhead
@@ -236,9 +238,8 @@ for run in range(args.n_runs):
                     rehearse = (task + i) > 0 if args.task_free else task > 0
 
                 if rehearse:
-                    if it==0:
-                        mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, ret_ind=True,
-                                                               aug=False) #,exclude_task=task)  # , exclude_task=task)
+                    mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, ret_ind=True,
+                                                           aug=False) #,exclude_task=task)  # , exclude_task=task)
                     hidden_buff = model.return_hidden(mem_x)
 
                 target = copy.deepcopy(target_orig)
@@ -321,7 +322,8 @@ for run in range(args.n_runs):
                                 if k == j:
                                     continue
 
-                                if (not neg_buf_updated) and mem_y[k].item() != pos_target:
+                                if (not neg_buf_updated) and mem_y[k].item() != pos_target \
+                                        and mem_y[k].item() not in target.unique(): #make sure its not in the incoming
                                     ind2_neg.append(k)
                                     neg_buf_updated = True
 
@@ -330,15 +332,15 @@ for run in range(args.n_runs):
                                     anc2_updated = True
 
                         if len(anchor_pos) != len(select) or len(ind_neg) != len(select):
-                            print('wiif')
                             break
 
-                        loss = 2.0*F.triplet_margin_loss(hidden[select],hidden[anchor_pos], hidden[ind_neg], 0.2)
+                        loss = args.incoming_neg*F.triplet_margin_loss(hidden[select],hidden[anchor_pos], hidden[ind_neg], 0.2)
 
                         if len(anchor2_pos) != len(target) or len(ind2_neg) != len(target):
                             break
 
-                        loss+= 0.0*F.triplet_margin_loss(hidden, hidden[anchor2_pos], normalize(hidden_buff[ind2_neg]), 0.1)
+
+                        loss+= args.buffer_neg*F.triplet_margin_loss(hidden, hidden[anchor2_pos], normalize(hidden_buff[ind2_neg]), 0.2)
 
 
                 opt.zero_grad()
