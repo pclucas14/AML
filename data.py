@@ -403,15 +403,7 @@ def get_split_cifar10(args):
     args.input_size = [3, 32, 32]
     args.input_type = 'continuous'
     # because data is between [-1,1]:
-    assert args.output_loss is not 'bernouilli'
-    if args.output_loss == None:
-        #TODO(multinomial is broken)
-        #args.output_loss = 'multinomial'
-        args.output_loss = 'mse'
-        print('\nsetting output loss to MSE')
 
-
-    # fetch MNIST
     train = datasets.CIFAR10('Data/', train=True,  download=True)
     test  = datasets.CIFAR10('Data/', train=False, download=True)
 

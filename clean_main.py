@@ -5,8 +5,6 @@ import random
 
 from copy import deepcopy
 from data   import *
-from mir    import *
-from ema    import EMA
 from utils  import get_logger, get_temp_logger, logging_per_task, sho_
 from new_buffer import Buffer as NewBuffer
 from buffer import Buffer
@@ -34,7 +32,6 @@ parser.add_argument('--disc_iters', type=int, default=1,
     help='number of training iterations for the classifier')
 parser.add_argument('--batch_size', type=int, default=10)
 parser.add_argument('--buffer_batch_size', type=int, default=10)
-parser.add_argument('--use_conv', action='store_true')
 parser.add_argument('--samples_per_task', type=int, default=-1,
     help='if negative, full dataset is used')
 parser.add_argument('--mem_size', type=int, default=600, help='controls buffer size')
@@ -42,12 +39,8 @@ parser.add_argument('--n_runs', type=int, default=1,
     help='number of runs to average performance')
 parser.add_argument('--suffix', type=str, default='',
     help="name for logfile")
-parser.add_argument('--subsample', type=int, default=50,
-    help="for subsampling in --method=replay, set to 0 to disable")
 parser.add_argument('--print_every', type=int, default=500,
     help="print metrics every this iteration")
-parser.add_argument('--update_buffer_hid', type=int, default=1,
-    help='related to latent buffer')
 # logging
 parser.add_argument('-l', '--log', type=str, default='off', choices=['off', 'online'],
     help='enable WandB logging')
@@ -55,19 +48,13 @@ parser.add_argument('--wandb_project', type=str, default='er_imbalance',
     help='name of the WandB project')
 parser.add_argument('--mask_vers', type=int, default=1)
 #------ MIR -----#
-parser.add_argument('-m','--method', type=str, default='rand_replay', choices=['no_rehearsal',
-    'rand_replay', 'mir_replay'])
-parser.add_argument('--compare_to_old_logits', action='store_true',help='uses old logits')
-parser.add_argument('--reuse_samples', type=int, default=0)
+parser.add_argument('-m','--method', type=str, default='er', choices=['er', 'mask', 'triplet'])
 parser.add_argument('--lr', type=float, default=0.1)
 
 parser.add_argument('--incoming_neg', type=float, default=2.0)
 parser.add_argument('--buffer_neg', type=float, default=2.0)
 
 parser.add_argument('--task_free', action='store_true')
-parser.add_argument('--mask_trick', action='store_true')
-parser.add_argument('--prot_trick', action='store_true')
-parser.add_argument('--ema', action='store_true')
 args = parser.parse_args()
 
 # Obligatory overhead
@@ -235,10 +222,7 @@ for run in range(args.n_runs):
             # Iteration Loop
             target_orig= copy.deepcopy(target)
             for it in range(args.disc_iters):
-                if args.method == 'no_rehearsal':
-                    rehearse = False
-                else:
-                    rehearse = (task + i) > 0 if args.task_free else task > 0
+                rehearse = (task + i) > 0 if args.task_free else task > 0
 
                 target = copy.deepcopy(target_orig)
                 hidden = model.return_hidden(data)
@@ -252,16 +236,16 @@ for run in range(args.n_runs):
 
                 mask = torch.zeros(len(target), args.n_classes)
 
-                if args.mask_trick:
+                if args.method == 'mask':
                     mask[:, mask_so_far] = 1
                     mask = mask.cuda()
                     logits = model.linear(hidden)
                     logits = logits.masked_fill(mask == 0, -1e9)
                     loss = F.cross_entropy(logits, target)
-                elif task == 0:
+                elif task == 0 or args.method == 'er':
                     logits = model.linear(hidden)
                     loss = F.cross_entropy(logits, target)
-                else:
+                elif args.method == 'triplet':
                     # fetch the constrasting points
                     pos_x, neg_x_same_t, neg_x_diff_t, invalid_idx = \
                             buffer.fetch_pos_neg_samples(target, task, idx)
@@ -274,6 +258,8 @@ for run in range(args.n_runs):
 
                     loss  = args.incoming_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_same_t, 0.2)
                     loss += args.buffer_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_diff_t, 0.2)
+                else:
+                    assert False
 
                 opt.zero_grad()
                 loss.backward(retain_graph=True)
