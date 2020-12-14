@@ -16,6 +16,41 @@ def normalize(x):
     x_normalized = x.div(x_norm + 0.00001)
     return x_normalized
 
+class ContrastiveLoss(torch.nn.Module):
+    """
+    Contrastive loss function.
+    Based on:
+    """
+
+    def __init__(self, margin=1.0):
+        super(ContrastiveLoss, self).__init__()
+        self.margin = margin
+
+    def check_type_forward(self, in_types):
+        assert len(in_types) == 3
+
+        x0_type, x1_type, y_type = in_types
+        assert x0_type.size() == x1_type.shape
+        assert x1_type.size()[0] == y_type.shape[0]
+        assert x1_type.size()[0] > 0
+        assert x0_type.dim() == 2
+        assert x1_type.dim() == 2
+        assert y_type.dim() == 1
+
+    def forward(self, x0, x1, y):
+        self.check_type_forward((x0, x1, y))
+
+        # euclidian distance
+        diff = x0 - x1
+        dist_sq = torch.sum(torch.pow(diff, 2), 1)
+        dist = torch.sqrt(dist_sq)
+
+        mdist = self.margin - dist
+        dist = torch.clamp(mdist, min=0.0)
+        loss = y * dist_sq + (1 - y) * torch.pow(dist, 2)
+        loss = torch.sum(loss) / 2.0 / x0.size()[0]
+        return loss
+
 from torch.nn.utils.weight_norm import WeightNorm
 class distLinear(nn.Module):
     def __init__(self, indim, outdim, weight=None):
@@ -23,23 +58,28 @@ class distLinear(nn.Module):
         self.L = nn.Linear( indim, outdim, bias = False)
         if weight is not None:
             self.L.weight.data = Variable(weight)
-        self.class_wise_learnable_norm = True  #See the issue#4&8 in the github
+        self.class_wise_learnable_norm = False #See the issue#4&8 in the github
         if self.class_wise_learnable_norm:
             WeightNorm.apply(self.L, 'weight', dim=0) #split the weight update component to direction and norm
 
-        if outdim <=200:
-            self.scale_factor = 2; #a fixed scale factor to scale the output of cos value into a reasonably large input for softmax
-        else:
-            self.scale_factor = 10; #in omniglot, a larger scale factor is required to handle >1000 output classes.
+
+        self.scale_factor = 10; #in omniglot, a larger scale factor is required to handle >1000 output classes.
+       # self.scale_factor = nn.Parameter(torch.tensor(0.5))
 
     def forward(self, x):
         x_norm = torch.norm(x, p=2, dim =1).unsqueeze(1).expand_as(x)
         x_normalized = x.div(x_norm+ 0.00001)
         if not self.class_wise_learnable_norm:
-            L_norm = torch.norm(self.L.weight.data, p=2, dim =1).unsqueeze(1).expand_as(self.L.weight.data)
-            self.L.weight.data = self.L.weight.data.div(L_norm + 0.00001)
-        cos_dist = self.L(x_normalized) #matrix product by forward function, but when using WeightNorm, this also multiply the cosine distance by a class-wise learnable norm, see the issue#4&8 in the github
-        scores = self.scale_factor* (cos_dist)
+            L_norm = torch.norm(self.L.weight, p=2, dim =1).unsqueeze(1).expand_as(self.L.weight.data)
+            #self.L.weight = self.L.weight.div(L_norm + 0.00001)#.data = self.L.weight.data.div(L_norm + 0.00001)
+            cos_dist = torch.mm(x_normalized,self.L.weight.div(L_norm + 0.00001).transpose(0,1))
+        else:
+            cos_dist = self.L(x_normalized) #matrix product by forward function, but when using WeightNorm, this also multiply the cosine distance by a class-wise learnable norm, see the issue#4&8 in the github
+        scores = self.scale_factor * (cos_dist)
+
+        if torch.abs(cos_dist.max())>2.0:
+            print('cos dist too big')
+            import ipdb; ipdb.set_trace()
 
         return scores
 
@@ -127,7 +167,7 @@ class ResNet(nn.Module):
 
         # hardcoded for now
         last_hid = nf * 8 * block.expansion if input_size[1] in [8,16,21,32,42] else 640
-        self.linear = nn.Linear(last_hid, num_classes)
+        self.linear = distLinear(last_hid,num_classes)#nn.Linear(last_hid, num_classes)
 
         self.activation = nn.ReLU()
 

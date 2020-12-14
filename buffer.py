@@ -4,6 +4,8 @@ import pdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+#import torchvision.transforms as transforms
+import kornia
 
 class Buffer(nn.Module):
     def __init__(self, args, input_size=None):
@@ -39,16 +41,22 @@ class Buffer(nn.Module):
         logits = torch.FloatTensor(buffer_size, args.n_classes).fill_(0)
         use = torch.FloatTensor(buffer_size).fill_(1)
 
+        dist_mat = torch.FloatTensor(buffer_size, buffer_size).fill_(-1)
+        dist_amt = torch.FloatTensor(buffer_size, buffer_size).fill_(0)
+
         if args.cuda:
             bx = bx.to(args.device)
             by = by.to(args.device)
             bt = bt.to(args.device)
             logits = logits.to(args.device)
             use = use.to(args.device)
+            dist_mat.to(args.device)
+            dist_amt.to(args.device)
 
         self.current_index = 0
         self.n_seen_so_far = 0
         self.is_full       = 0
+        self.device = args.device
 
         # registering as buffer allows us to save the object using `torch.save`
         self.register_buffer('bx', bx)
@@ -56,6 +64,9 @@ class Buffer(nn.Module):
         self.register_buffer('bt', bt)
         self.register_buffer('logits', logits)
         self.register_buffer('use', use)
+
+        self.register_buffer('dist_mat',dist_mat)
+        self.register_buffer('dist_amt', dist_amt)
 
         self.to_one_hot  = lambda x : x.new(x.size(0), args.n_classes).fill_(0).scatter_(1, x.unsqueeze(1), 1)
         self.arange_like = lambda x : torch.arange(x.size(0)).to(x.device)
@@ -146,6 +157,11 @@ class Buffer(nn.Module):
         self.by[idx_buffer] = y[idx_new_data]
         self.bt[idx_buffer] = t
 
+        self.dist_amt[idx_buffer , :] = 0
+        self.dist_amt[: , idx_buffer] = 0
+        self.dist_mat[idx_buffer , :] = 0
+        self.dist_mat[: , idx_buffer] = 0
+
         if save_logits:
             self.logits[idx_buffer] = logits[idx_new_data]
 
@@ -184,7 +200,7 @@ class Buffer(nn.Module):
         self.by = self.by[:remove_after_this_idx]
         self.br = self.bt[:remove_after_this_idx]
 
-    def sample(self, amt, exclude_task = None, ret_ind = False,reset=False):
+    def sample(self, amt, exclude_task = None, ret_ind = False, aug=False):
         if exclude_task is not None:
             valid_indices = (self.t != exclude_task)
             valid_indices = valid_indices.nonzero().squeeze()
@@ -192,8 +208,6 @@ class Buffer(nn.Module):
         else:
             bx, by, bt = self.bx[:self.current_index], self.by[:self.current_index], self.bt[:self.current_index]
 
-        if reset:
-            self.use = torch.FloatTensor(self.bx.size(0)).fill_(1)
 
         if bx.size(0) < amt:
             if ret_ind:
@@ -202,11 +216,6 @@ class Buffer(nn.Module):
                 return bx, by, bt
         else:
             indices = torch.from_numpy(np.random.choice(bx.size(0), amt, replace=False))
-            if False:
-                proba = self.use
-                proba = proba * 1.0 / proba.sum()
-                random_gen = torch.distributions.categorical.Categorical(probs=proba)
-                indices = torch.LongTensor([random_gen.sample().item() for _ in range(amt)])
 
 
             if self.args.cuda:
@@ -216,10 +225,21 @@ class Buffer(nn.Module):
 
             self.use[indices]+=1
 
-            if ret_ind:
-                return bx[indices], by[indices], bt[indices], indices
+            if aug:
+                # this is sort of wrong cause its already normalized
+                # needs to be fixed somehow (unnormalized and renormanlized in th e end?>)
+
+                transform = nn.Sequential(
+                    kornia.augmentation.RandomCrop(size=(32,32),padding=4),
+                    kornia.augmentation.RandomHorizontalFlip()
+                )
+                ret = transform(bx[indices])
             else:
-                return bx[indices], by[indices], bt[indices]
+                ret = bx[indices]
+            if ret_ind:
+                return ret, by[indices], bt[indices], indices
+            else:
+                return ret, by[indices], bt[indices]
 
     def split(self, amt):
         indices = torch.randperm(self.current_index).to(self.args.device)
