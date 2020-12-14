@@ -11,62 +11,30 @@ class Buffer(nn.Module):
     def __init__(self, args, input_size=None):
         super().__init__()
         self.args = args
-        self.k    = 0.03
 
         self.place_left = True
 
         if input_size is None:
             input_size = args.input_size
 
-        # TODO(change this:)
-        if args.gen:
-            if 'mnist' in args.dataset:
-                img_size = 784
-                economy = img_size // input_size[0]
-            elif 'cifar' in args.dataset:
-                img_size = 32 * 32 * 3
-                economy = img_size // (input_size[0] ** 2)
-            elif 'imagenet' in args.dataset:
-                img_size = 84 * 84 * 3
-                economy = img_size // (input_size[0] ** 2)
-        else:
-            economy = 1
-
-        buffer_size = economy  * args.mem_size
+        buffer_size = args.mem_size
         print('buffer has %d slots' % buffer_size)
 
         bx = torch.FloatTensor(buffer_size, *input_size).fill_(0)
         by = torch.LongTensor(buffer_size).fill_(0)
         bt = torch.LongTensor(buffer_size).fill_(0)
+        bidx = torch.LongTensor(buffer_size).fill_(0)
         logits = torch.FloatTensor(buffer_size, args.n_classes).fill_(0)
-        use = torch.FloatTensor(buffer_size).fill_(1)
-
-        dist_mat = torch.FloatTensor(buffer_size, buffer_size).fill_(-1)
-        dist_amt = torch.FloatTensor(buffer_size, buffer_size).fill_(0)
-
-        if args.cuda:
-            bx = bx.to(args.device)
-            by = by.to(args.device)
-            bt = bt.to(args.device)
-            logits = logits.to(args.device)
-            use = use.to(args.device)
-            dist_mat.to(args.device)
-            dist_amt.to(args.device)
 
         self.current_index = 0
         self.n_seen_so_far = 0
-        self.is_full       = 0
-        self.device = args.device
 
         # registering as buffer allows us to save the object using `torch.save`
         self.register_buffer('bx', bx)
         self.register_buffer('by', by)
         self.register_buffer('bt', bt)
         self.register_buffer('logits', logits)
-        self.register_buffer('use', use)
-
-        self.register_buffer('dist_mat',dist_mat)
-        self.register_buffer('dist_amt', dist_amt)
+        self.register_buffer('bidx', bidx)
 
         self.to_one_hot  = lambda x : x.new(x.size(0), args.n_classes).fill_(0).scatter_(1, x.unsqueeze(1), 1)
         self.arange_like = lambda x : torch.arange(x.size(0)).to(x.device)
@@ -88,28 +56,11 @@ class Buffer(nn.Module):
     def valid(self):
         return self.is_valid[:self.current_index]
 
-    def display(self, gen=None, epoch=-1):
-        from torchvision.utils import save_image
-        from PIL import Image
-
-        if 'cifar' in self.args.dataset:
-            shp = (-1, 3, 32, 32)
-        else:
-            shp = (-1, 1, 28, 28)
-
-        if gen is not None:
-            x = gen.decode(self.x)
-        else:
-            x = self.x
-
-        save_image((x.reshape(shp) * 0.5 + 0.5), 'samples/buffer_%d.png' % epoch, nrow=int(self.current_index ** 0.5))
-        #Image.open('buffer_%d.png' % epoch).show()
-        print(self.y.sum(dim=0))
-
-    def add_reservoir(self, x, y, logits, t):
+    def add_reservoir(self, x, y, logits, t, idx=None, overwrite=True):
         n_elem = x.size(0)
         save_logits = logits is not None
 
+        self.to_be_removed = None
         # add whatever still fits in the buffer
         place_left = max(0, self.bx.size(0) - self.current_index)
         if place_left:
@@ -118,9 +69,11 @@ class Buffer(nn.Module):
             self.by[self.current_index: self.current_index + offset].data.copy_(y[:offset])
             self.bt[self.current_index: self.current_index + offset].fill_(t)
 
-
             if save_logits:
                 self.logits[self.current_index: self.current_index + offset].data.copy_(logits[:offset])
+
+            if idx is not None:
+                self.bidx[self.current_index: self.current_index + offset].data.copy_(idx[:offset])
 
             self.current_index += offset
             self.n_seen_so_far += offset
@@ -145,85 +98,101 @@ class Buffer(nn.Module):
         if idx_buffer.numel() == 0:
             return
 
-        assert idx_buffer.max() < self.bx.size(0), pdb.set_trace()
-        assert idx_buffer.max() < self.by.size(0), pdb.set_trace()
-        assert idx_buffer.max() < self.bt.size(0), pdb.set_trace()
-
-        assert idx_new_data.max() < x.size(0), pdb.set_trace()
-        assert idx_new_data.max() < y.size(0), pdb.set_trace()
-
         # perform overwrite op
-        self.bx[idx_buffer] = x[idx_new_data]
-        self.by[idx_buffer] = y[idx_new_data]
-        self.bt[idx_buffer] = t
+        if overwrite:
+            self.bx[idx_buffer] = x[idx_new_data]
+            self.by[idx_buffer] = y[idx_new_data]
+            self.bt[idx_buffer] = t
+        else:
+            """ instead we concatenate, and we will remove later! """
+            self.bx = torch.cat((self.bx, x[idx_new_data]))
+            self.by = torch.cat((self.by, y[idx_new_data]))
+            self.bt = torch.cat((self.bt, torch.zeros_like(y[idx_new_data]).fill_(t)))
 
-        self.dist_amt[idx_buffer , :] = 0
-        self.dist_amt[: , idx_buffer] = 0
-        self.dist_mat[idx_buffer , :] = 0
-        self.dist_mat[: , idx_buffer] = 0
+            if idx is not None:
+                self.bidx = torch.cat((self.bidx, idx[place_left:][idx_new_data]))
+                assert self.bt.size(0) == self.bidx.size(0), pdb.set_trace()
+
+            self.to_be_removed = idx_buffer
 
         if save_logits:
             self.logits[idx_buffer] = logits[idx_new_data]
 
+    def fetch_pos_neg_samples(self, label, task, idx):
+        # a sample is uniquely identifiable using `task` and `idx`
 
-    def measure_valid(self, generator, classifier):
-        with torch.no_grad():
-            # fetch valid examples
-            valid_indices = self.valid.nonzero()
-            valid_x, valid_y = self.bx[valid_indices], self.by[valid_indices]
-            one_hot_y = self.to_one_hot(valid_y.flatten())
+        if type(task) == int:
+            task = torch.LongTensor(label.size(0)).to(label.device).fill_(task)
 
-            hid_x = generator.idx_2_hid(valid_x)
-            x_hat = generator.decode(hid_x)
+        same_label = label.view(1, -1) == self.by.view(-1, 1)   # buf_size x label_size
+        same_task  = task.view(1, -1)  == self.bt.view(-1, 1)    # buf_size x label_size
+        same_idx   = idx.view(1, -1)   == self.bidx.view(-1, 1) # buf_size x label_size
+        same_ex    = same_task & same_idx
 
-            logits = classifier(x_hat)
-            _, pred = logits.max(dim=1)
-            one_hot_pred = self.to_one_hot(pred)
-            correct = one_hot_pred * one_hot_y
+        valid_pos  = same_label
+        valid_neg_same_t = ~same_label & same_task
+        valid_neg_diff_t = ~same_label & ~same_task
 
-            per_class_correct = correct.sum(dim=0)
-            per_class_deno    = one_hot_y.sum(dim=0)
-            per_class_acc     = per_class_correct.float() / per_class_deno.float()
-            self.class_weight = 1. - per_class_acc
-            self.valid_acc    = per_class_acc
-            self.valid_deno   = per_class_deno
+        # remove points which don't have pos, neg from same and diff t
+        has_valid_pos = valid_pos.sum(0) > 0
+        has_valid_neg = (valid_neg_same_t.sum(0) > 0) & (valid_neg_diff_t.sum(0) > 0)
 
-    def shuffle_(self):
-        indices = torch.randperm(self.current_index).to(self.args.device)
-        self.bx = self.bx[indices]
-        self.by = self.by[indices]
-        self.bt = self.bt[indices]
+        invalid_idx = (~has_valid_pos | ~has_valid_neg).nonzero().squeeze()
+        if invalid_idx.numel() > 0:
+            # so the fetching operation won't fail
+            valid_pos[:, invalid_idx] = 1
+            valid_neg_same_t[:, invalid_idx] = 1
+            valid_neg_diff_t[:, invalid_idx] = 1
 
+        # easier if invalid_idx is a binary tensor
+        is_invalid = torch.zeros_like(label).bool()
+        is_invalid[invalid_idx] = 1
 
-    def delete_up_to(self, remove_after_this_idx):
-        self.bx = self.bx[:remove_after_this_idx]
-        self.by = self.by[:remove_after_this_idx]
-        self.br = self.bt[:remove_after_this_idx]
+        # fetch positive samples
+        pos_idx = torch.multinomial(valid_pos.float().T, 1).squeeze(1)
+        neg_idx_same_t = torch.multinomial(valid_neg_same_t.float().T, 1).squeeze(1)
+        neg_idx_diff_t = torch.multinomial(valid_neg_diff_t.float().T, 1).squeeze(1)
+
+        return self.bx[pos_idx], \
+               self.bx[neg_idx_same_t], \
+               self.bx[neg_idx_diff_t], \
+               is_invalid
+
+    def balance_memory(self):
+        if self.to_be_removed is None:
+            return
+
+        del_idx = self.to_be_removed
+        keep = torch.LongTensor(size=(self.bx.size(0),)).to(self.bx.device).fill_(1).bool()
+        keep[del_idx] = False
+
+        self.bx = self.bx[keep]
+        self.by = self.by[keep]
+        self.bt = self.bt[keep]
+        self.bidx = self.bidx[keep]
 
     def sample(self, amt, exclude_task = None, ret_ind = False, aug=False):
         if exclude_task is not None:
             valid_indices = (self.t != exclude_task)
             valid_indices = valid_indices.nonzero().squeeze()
-            bx, by, bt = self.bx[valid_indices], self.by[valid_indices], self.bt[valid_indices]
+            bx = self.bx[valid_indices]
+            by = self.by[valid_indices]
+            bt = self.bt[valid_indices]
+            bidx = self.bidx[valid_indices]
         else:
-            bx, by, bt = self.bx[:self.current_index], self.by[:self.current_index], self.bt[:self.current_index]
-
+            bx = self.bx[:self.current_index]
+            by = self.by[:self.current_index]
+            bt = self.bt[:self.current_index]
+            bidx = self.bidx[:self.current_index]
 
         if bx.size(0) < amt:
             if ret_ind:
-                return bx, by, bt, torch.from_numpy(np.arange(bx.size(0)))
+                return bx, by, bt, bidx
             else:
                 return bx, by, bt
         else:
             indices = torch.from_numpy(np.random.choice(bx.size(0), amt, replace=False))
-
-
-            if self.args.cuda:
-                indices = indices.to(self.args.device)
-
-
-
-            self.use[indices]+=1
+            indices = indices.to(self.bx.device)
 
             if aug:
                 # this is sort of wrong cause its already normalized
@@ -237,7 +206,7 @@ class Buffer(nn.Module):
             else:
                 ret = bx[indices]
             if ret_ind:
-                return ret, by[indices], bt[indices], indices
+                return ret, by[indices], bt[indices], bidx[indices]
             else:
                 return ret, by[indices], bt[indices]
 

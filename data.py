@@ -38,9 +38,9 @@ class XYDataset(torch.utils.data.Dataset):
 
         # for some reason mnist does better \in [0,1] than [-1, 1]
         if self.source == 'mnist':
-            return x, y
+            return x, y, idx
         else:
-            return (x - 0.5) * 2, y
+            return (x - 0.5) * 2, y, idx
 
 
 """ Template Dataset for Continual Learning """

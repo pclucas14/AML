@@ -8,6 +8,7 @@ from data   import *
 from mir    import *
 from ema    import EMA
 from utils  import get_logger, get_temp_logger, logging_per_task, sho_
+from new_buffer import Buffer as NewBuffer
 from buffer import Buffer
 from copy   import deepcopy
 from pydoc  import locate
@@ -166,6 +167,7 @@ def eval_model(model, loader, task, mode='valid'):
 
 hid_new_change=AverageMeter()
 hid_old_change=AverageMeter()
+
 # Train the model
 # -----------------------------------------------------------------------------------------
 
@@ -185,17 +187,16 @@ for run in range(args.n_runs):
         model = model.to(args.device)
     model.train()
 
-
     opt = torch.optim.SGD(model.parameters(), lr=args.lr)
 
-    buffer = Buffer(args)
+    # new_buffer = NewBuffer(args.input_size, args.n_classes, args.mem_size).to(args.device)
+    buffer = Buffer(args).to(args.device)
     if run == 0:
         print("number of classifier parameters:",
                 sum([np.prod(p.size()) for p in model.parameters()]))
         print("buffer parameters: ", np.prod(buffer.bx.size()))
 
     mask_so_far = None
-
     #----------
     # Task Loop
     for task, tr_loader in enumerate(train_loader):
@@ -209,14 +210,19 @@ for run in range(args.n_runs):
         old_class_mask = deepcopy(mask_so_far)
         #---------------
         # Minibatch Loop
-        for i, (data, target, _) in enumerate(tr_loader):
+        for i, (data, target, idx) in enumerate(tr_loader):
             if args.unit_test and i > 10: break
             if sample_amt > args.samples_per_task > 0: break
             sample_amt += data.size(0)
 
             if args.cuda:
-                data, target = data.to(args.device), target.to(args.device)
+                idx = idx.to(args.device)
+                data = data.to(args.device)
+                target = target.to(args.device)
 
+            # first things first, add to buffer
+            # new_buffer.add(data, target, task, idx)
+            buffer.add_reservoir(data, target, None, task, idx, overwrite=False)
 
             #------ Train Classifier-------#
             if i==0:
@@ -234,13 +240,9 @@ for run in range(args.n_runs):
                 else:
                     rehearse = (task + i) > 0 if args.task_free else task > 0
 
-                if rehearse:
-                    mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, ret_ind=True,
-                                                           aug=False) #,exclude_task=task)  # , exclude_task=task)
-                    hidden_buff = model.return_hidden(mem_x)
-
                 target = copy.deepcopy(target_orig)
                 hidden = model.return_hidden(data)
+
                 # mask logits not present in batch
                 present = target.unique()
                 if mask_so_far is not None:
@@ -260,87 +262,28 @@ for run in range(args.n_runs):
                     logits = model.linear(hidden)
                     loss = F.cross_entropy(logits, target)
                 else:
-                    ind_neg = []
-                    anchor_pos = []
-                    select = []
-                    p = np.arange(0, len(target))
+                    # fetch the constrasting points
+                    pos_x, neg_x_same_t, neg_x_diff_t, invalid_idx = \
+                            buffer.fetch_pos_neg_samples(target, task, idx)
 
+                    all_xs  = torch.cat((pos_x, neg_x_same_t, neg_x_diff_t))
+                    all_hid = normalize(model.return_hidden(all_xs)).reshape(3, pos_x.size(0), -1)
+                    pos_hid, neg_hid_same_t, neg_hid_diff_t = all_hid[:, ~invalid_idx].chunk(3)
 
-                    skip=False
-                    for t in target.unique():
-                        if (t == target).sum()==0: #this wont work with many classes + small batch size
-                            skip=True
-                            break
+                    hidden_norm = normalize(hidden[~invalid_idx])
 
-                    if skip:
-                        break
-
-
-                    for j in range(len(target)):
-                        pos_target = target[j].item()
-
-                        np.random.shuffle(p)
-                        neg_updated = False
-                        anc_updated = False
-                        neg = None
-                        anc = None
-                        for k in p:
-                            if k == j:
-                                continue
-
-                            if (not neg_updated) and target[k].item() != pos_target:
-                                neg = k
-                                neg_updated = True
-
-                            if (not anc_updated) and target[k].item() == pos_target:
-                                anc = k
-                                anc_updated = True
-                        if neg_updated and anc_updated:
-                            select.append(j)
-                            ind_neg.append(neg)
-                            anchor_pos.append(anc)
-
-                    hidden = normalize(hidden)
-
-                    ind2_neg = []
-                    anchor2_pos = []
-                    for j in range(len(target)):
-                        pos_target = target[j].item()
-
-                        np.random.shuffle(p)
-                        neg_buf_updated = False
-                        anc2_updated = False
-                        for k in p:
-                            if k == j:
-                                continue
-
-                            if (not neg_buf_updated) and mem_y[k].item() != pos_target \
-                                    and mem_y[k].item() not in target.unique(): #make sure its not in the incoming
-                                ind2_neg.append(k)
-                                neg_buf_updated = True
-
-                            if (not anc2_updated) and target[k].item() == pos_target:
-                                anchor2_pos.append(k)
-                                anc2_updated = True
-
-                    if len(anchor_pos) != len(select) or len(ind_neg) != len(select):
-                        break
-
-                    loss = args.incoming_neg*F.triplet_margin_loss(hidden[select],hidden[anchor_pos], hidden[ind_neg], 0.2)
-
-                    if len(anchor2_pos) != len(target) or len(ind2_neg) != len(target):
-                        break
-
-
-                    loss+= args.buffer_neg*F.triplet_margin_loss(hidden[select], hidden[anchor_pos], normalize(hidden_buff[ind2_neg][select]), 0.2)
-
+                    loss  = args.incoming_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_same_t, 0.2)
+                    loss += args.buffer_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_diff_t, 0.2)
 
                 opt.zero_grad()
                 loss.backward(retain_graph=True)
 
                 if rehearse:
+                    mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, aug=False, ret_ind=True, exclude_task=task)
+                    hidden_buff = model.return_hidden(mem_x)
+
                     logits_buffer = model.linear(hidden_buff)
-                   # if args.mask_trick:
+                    # if args.mask_trick:
                     mask = torch.zeros_like(logits_buffer)
                     mask[:, mask_so_far] = 1
                     logits_buffer = logits_buffer.masked_fill(mask == 0, -1e9)
@@ -352,9 +295,10 @@ for run in range(args.n_runs):
                 model(data)
                 opt.step()
 
-            buffer.add_reservoir(data, target_orig, None, task)
+            # make sure we don't exceed the memory requirements
+            buffer.balance_memory()
 
-
+        print(f'buf {buffer.bx.size(0)}')
         eval_model(model, val_loader, task)
 
 

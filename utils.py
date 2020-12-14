@@ -414,3 +414,14 @@ class Lookahead(Optimizer):
     def add_param_group(self, param_group):
         param_group["counter"] = 0
         self.optimizer.add_param_group(param_group)
+
+def sho_(x, nrow=8):
+    x = x * .5 + .5
+    from torchvision.utils import save_image
+    from PIL import Image
+    if x.ndim == 5:
+        nrow=x.size(1)
+        x = x.reshape(-1, *x.shape[2:])
+
+    save_image(x, 'tmp.png', nrow=nrow)
+    Image.open('tmp.png').show()
