@@ -279,7 +279,7 @@ for run in range(args.n_runs):
                 loss.backward(retain_graph=True)
 
                 if rehearse:
-                    mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, aug=False, ret_ind=True, exclude_task=task)
+                    mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, aug=False, ret_ind=True)#, exclude_task=task)
                     hidden_buff = model.return_hidden(mem_x)
 
                     logits_buffer = model.linear(hidden_buff)
