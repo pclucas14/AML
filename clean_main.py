@@ -256,16 +256,17 @@ for run in range(args.n_runs):
                     pos_hid, neg_hid_same_t, neg_hid_diff_t = all_hid[:, ~invalid_idx].chunk(3)
                     neg_hid_same_t = neg_hid_same_t.squeeze()
                     neg_hid_diff_t = neg_hid_diff_t.squeeze()
+                    pos_hid = pos_hid.squeeze()
                     hidden_norm = normalize(hidden[~invalid_idx])
 
 
                     if hidden_norm.shape[0] > 0:
-                        print(hidden_norm.shape)
-                        print(neg_hid_same_t.shape)
-                        print(normalize(model.linear.L.weight[target[~invalid_idx]]).shape)
+                   #     print(hidden_norm.shape)
+                    #    print(neg_hid_same_t.shape)
+                     #   print(normalize(model.linear.L.weight[target[~invalid_idx]]).shape)
                         loss = args.incoming_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_same_t, 0.2)
 
-                        loss += 2.0 * F.triplet_margin_loss(hidden_norm,
+                        loss += 0.0 * F.triplet_margin_loss(hidden_norm,
                                                             normalize(model.linear.L.weight[target[~invalid_idx]]),
                                                             neg_hid_same_t, 0.05)
                         loss += args.buffer_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_diff_t, 0.2)
