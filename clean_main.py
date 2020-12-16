@@ -6,7 +6,6 @@ import random
 from copy import deepcopy
 from data   import *
 from utils  import get_logger, get_temp_logger, logging_per_task, sho_
-from new_buffer import Buffer as NewBuffer
 from buffer import Buffer
 from copy   import deepcopy
 from pydoc  import locate
@@ -237,7 +236,9 @@ for run in range(args.n_runs):
                 mask = torch.zeros(len(target), args.n_classes)
 
                 if args.method == 'mask':
-                    mask[:, mask_so_far] = 1
+                    mask[:, present] = 1
+                    if mask_so_far.max() < args.n_classes-1:
+                        mask[:,mask_so_far.max():]=1
                     mask = mask.cuda()
                     logits = model.linear(hidden)
                     logits = logits.masked_fill(mask == 0, -1e9)
@@ -270,9 +271,9 @@ for run in range(args.n_runs):
 
                     logits_buffer = model.linear(hidden_buff)
                     # if args.mask_trick:
-                    mask = torch.zeros_like(logits_buffer)
-                    mask[:, mask_so_far] = 1
-                    logits_buffer = logits_buffer.masked_fill(mask == 0, -1e9)
+                   # mask = torch.zeros_like(logits_buffer)
+                  #  mask[:, mask_so_far] = 1
+                   # logits_buffer = logits_buffer.masked_fill(mask == 0, -1e9)
 
                     loss_a = F.cross_entropy(logits_buffer, mem_y, reduction='none')
                     loss = (loss_a).sum() / loss_a.size(0)
