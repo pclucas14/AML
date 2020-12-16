@@ -129,6 +129,7 @@ class Buffer(nn.Module):
         same_idx   = idx.view(1, -1)   == self.bidx.view(-1, 1) # buf_size x label_size
         same_ex    = same_task & same_idx
 
+
         valid_pos  = same_label
         valid_neg_same_t = ~same_label & same_task
         valid_neg_diff_t = ~same_label & ~same_task
@@ -153,6 +154,7 @@ class Buffer(nn.Module):
         neg_idx_same_t = torch.multinomial(valid_neg_same_t.float().T, 1).squeeze(1)
         neg_idx_diff_t = torch.multinomial(valid_neg_diff_t.float().T, 1).squeeze(1)
 
+        #import ipdb; ipdb.set_trace()
         return self.bx[pos_idx], \
                self.bx[neg_idx_same_t], \
                self.bx[neg_idx_diff_t], \

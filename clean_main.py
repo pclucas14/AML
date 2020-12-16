@@ -235,6 +235,7 @@ for run in range(args.n_runs):
 
                 mask = torch.zeros(len(target), args.n_classes)
 
+                update = True
                 if args.method == 'mask':
                     mask[:, present] = 1
                     if mask_so_far.max() < args.n_classes-1:
@@ -257,13 +258,24 @@ for run in range(args.n_runs):
 
                     hidden_norm = normalize(hidden[~invalid_idx])
 
-                    loss  = args.incoming_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_same_t, 0.2)
-                    loss += args.buffer_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_diff_t, 0.2)
+
+                    if hidden_norm.shape[0] > 0:
+
+                        loss = args.incoming_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_same_t, 0.2)
+                      #  loss += 2.0 * F.triplet_margin_loss(hidden_norm,
+                       #                                     normalize(model.linear.L.weight[target[~invalid_idx]]),
+                        #                                    neg_hid_same_t, 0.05)
+                        loss += args.buffer_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_diff_t, 0.2)
+                    else:
+                     #   print(loss)
+                        update = False
+                    #    import ipdb; ipdb.set_trace()
                 else:
                     assert False
 
                 opt.zero_grad()
-                loss.backward(retain_graph=True)
+                if update:
+                    loss.backward(retain_graph=True)
 
                 if rehearse:
                     mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, aug=False, ret_ind=True)#, exclude_task=task)
