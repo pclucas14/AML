@@ -262,9 +262,12 @@ for run in range(args.n_runs):
                     if hidden_norm.shape[0] > 0:
 
                         loss = args.incoming_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_same_t, 0.2)
-                      #  loss += 2.0 * F.triplet_margin_loss(hidden_norm,
-                       #                                     normalize(model.linear.L.weight[target[~invalid_idx]]),
-                        #                                    neg_hid_same_t, 0.05)
+                        print(hidden_norm.shape)
+                        print(neg_hid_same_t.shape)
+                        print(normalize(model.linear.L.weight[target[~invalid_idx]]).shape)
+                        loss += 2.0 * F.triplet_margin_loss(hidden_norm,
+                                                            normalize(model.linear.L.weight[target[~invalid_idx]]),
+                                                            neg_hid_same_t, 0.05)
                         loss += args.buffer_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_diff_t, 0.2)
                     else:
                      #   print(loss)
