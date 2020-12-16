@@ -56,11 +56,11 @@ class Buffer(nn.Module):
     def valid(self):
         return self.is_valid[:self.current_index]
 
-    def add_reservoir(self, x, y, logits, t, idx=None, overwrite=True):
+    def add_reservoir(self, x, y, logits, t, idx, overwrite=True):
         n_elem = x.size(0)
         save_logits = logits is not None
 
-        self.to_be_removed = None
+        self.keep = None
         # add whatever still fits in the buffer
         place_left = max(0, self.bx.size(0) - self.current_index)
         if place_left:
@@ -85,17 +85,17 @@ class Buffer(nn.Module):
         self.place_left = False
 
         # remove what is already in the buffer
-        x, y = x[place_left:], y[place_left:]
+        x, y, idx = x[place_left:], y[place_left:], idx[place_left:]
 
         indices = torch.FloatTensor(x.size(0)).to(x.device).uniform_(0, self.n_seen_so_far).long()
-        valid_indices = (indices < self.bx.size(0)).long()
+        valid_indices = (indices < self.bx.size(0))
 
         idx_new_data = valid_indices.nonzero().squeeze(-1)
         idx_buffer   = indices[idx_new_data]
 
         self.n_seen_so_far += x.size(0)
 
-        if idx_buffer.numel() == 0:
+        if idx_buffer.numel() == 0 and overwrite:
             return
 
         # perform overwrite op
@@ -103,22 +103,47 @@ class Buffer(nn.Module):
             self.bx[idx_buffer] = x[idx_new_data]
             self.by[idx_buffer] = y[idx_new_data]
             self.bt[idx_buffer] = t
+            self.bidx[idx_buffer] = idx[idx_new_data]
         else:
+            del_new_data = (~valid_indices).nonzero().squeeze(-1) + self.bx.size(0)
+
             """ instead we concatenate, and we will remove later! """
-            self.bx = torch.cat((self.bx, x[idx_new_data]))
-            self.by = torch.cat((self.by, y[idx_new_data]))
-            self.bt = torch.cat((self.bt, torch.zeros_like(y[idx_new_data]).fill_(t)))
+            self.bx = torch.cat((self.bx, x))
+            self.by = torch.cat((self.by, y))
+            self.bt = torch.cat((self.bt, torch.zeros_like(y).fill_(t)))
+            self.bidx = torch.cat((self.bidx, idx))
 
-            if idx is not None:
-                self.bidx = torch.cat((self.bidx, idx[place_left:][idx_new_data]))
-                assert self.bt.size(0) == self.bidx.size(0), pdb.set_trace()
+            keep = torch.ones_like(self.by)
+            keep[idx_buffer] = 0
+            keep[del_new_data] = 0
+            self.keep = keep.bool()
 
-            self.to_be_removed = idx_buffer
+            extra = keep.sum() - self.args.mem_size
+            if extra > 0:
+                # print(f'extra : {extra}')
+                probs = keep.float() / keep.sum()
+                also = torch.multinomial(probs, extra)
+                keep[also] = 0
+
+            assert keep.sum() == self.args.mem_size, pdb.set_trace()
 
         if save_logits:
             self.logits[idx_buffer] = logits[idx_new_data]
 
-    def fetch_pos_neg_samples(self, label, task, idx):
+
+    def balance_memory(self):
+        if self.keep is None:
+            return
+
+        self.bx = self.bx[self.keep]
+        self.by = self.by[self.keep]
+        self.bt = self.bt[self.keep]
+        self.bidx = self.bidx[self.keep]
+
+        self.keep = None
+
+
+    def fetch_pos_neg_samples(self, label, task, idx, data=None):
         # a sample is uniquely identifiable using `task` and `idx`
 
         if type(task) == int:
@@ -152,6 +177,7 @@ class Buffer(nn.Module):
         pos_idx = torch.multinomial(valid_pos.float().T, 1).squeeze(1)
         neg_idx_same_t = torch.multinomial(valid_neg_same_t.float().T, 1).squeeze(1)
         neg_idx_diff_t = torch.multinomial(valid_neg_diff_t.float().T, 1).squeeze(1)
+        xx = 1
 
         #import ipdb; ipdb.set_trace()
         return self.bx[pos_idx], \
@@ -159,18 +185,6 @@ class Buffer(nn.Module):
                self.bx[neg_idx_diff_t], \
                is_invalid
 
-    def balance_memory(self):
-        if self.to_be_removed is None:
-            return
-
-        del_idx = self.to_be_removed
-        keep = torch.LongTensor(size=(self.bx.size(0),)).to(self.bx.device).fill_(1).bool()
-        keep[del_idx] = False
-
-        self.bx = self.bx[keep]
-        self.by = self.by[keep]
-        self.bt = self.bt[keep]
-        self.bidx = self.bidx[keep]
 
     def sample(self, amt, exclude_task = None, ret_ind = False, aug=False):
         if exclude_task is not None:
