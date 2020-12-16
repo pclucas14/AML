@@ -129,10 +129,9 @@ class Buffer(nn.Module):
         same_idx   = idx.view(1, -1)   == self.bidx.view(-1, 1) # buf_size x label_size
         same_ex    = same_task & same_idx
 
-
-        valid_pos  = same_label
-        valid_neg_same_t = ~same_label & same_task
-        valid_neg_diff_t = ~same_label & ~same_task
+        valid_pos  = same_label & ~same_ex
+        valid_neg_same_t = ~same_label & same_task & ~same_ex
+        valid_neg_diff_t = ~same_label & ~same_task & ~same_ex
 
         # remove points which don't have pos, neg from same and diff t
         has_valid_pos = valid_pos.sum(0) > 0
