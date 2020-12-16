@@ -194,6 +194,7 @@ for run in range(args.n_runs):
 
         model = model.train()
         old_class_mask = deepcopy(mask_so_far)
+
         #---------------
         # Minibatch Loop
         for i, (data, target, idx) in enumerate(tr_loader):
@@ -206,8 +207,6 @@ for run in range(args.n_runs):
                 data = data.to(args.device)
                 target = target.to(args.device)
 
-            # first things first, add to buffer
-            # new_buffer.add(data, target, task, idx)
             buffer.add_reservoir(data, target, None, task, idx, overwrite=False)
 
             #------ Train Classifier-------#
@@ -249,13 +248,15 @@ for run in range(args.n_runs):
                 elif args.method == 'triplet':
                     # fetch the constrasting points
                     pos_x, neg_x_same_t, neg_x_diff_t, invalid_idx = \
-                            buffer.fetch_pos_neg_samples(target, task, idx)
+                            buffer.fetch_pos_neg_samples(target, task, idx, data=data)
 
                     all_xs  = torch.cat((pos_x, neg_x_same_t, neg_x_diff_t))
                     all_hid = normalize(model.return_hidden(all_xs)).reshape(3, pos_x.size(0), -1)
                     pos_hid, neg_hid_same_t, neg_hid_diff_t = all_hid[:, ~invalid_idx].chunk(3)
 
                     hidden_norm = normalize(hidden[~invalid_idx])
+
+                    x_show = torch.stack((data, pos_x, neg_x_same_t, neg_x_diff_t))
 
                     loss  = args.incoming_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_same_t, 0.2)
                     loss += args.buffer_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_diff_t, 0.2)
@@ -270,10 +271,6 @@ for run in range(args.n_runs):
                     hidden_buff = model.return_hidden(mem_x)
 
                     logits_buffer = model.linear(hidden_buff)
-                    # if args.mask_trick:
-                   # mask = torch.zeros_like(logits_buffer)
-                  #  mask[:, mask_so_far] = 1
-                   # logits_buffer = logits_buffer.masked_fill(mask == 0, -1e9)
 
                     loss_a = F.cross_entropy(logits_buffer, mem_y, reduction='none')
                     loss = (loss_a).sum() / loss_a.size(0)
