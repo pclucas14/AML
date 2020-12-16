@@ -253,10 +253,7 @@ for run in range(args.n_runs):
 
                     all_xs  = torch.cat((pos_x, neg_x_same_t, neg_x_diff_t))
                     all_hid = normalize(model.return_hidden(all_xs)).reshape(3, pos_x.size(0), -1)
-                    pos_hid, neg_hid_same_t, neg_hid_diff_t = all_hid[:, ~invalid_idx].chunk(3)
-                    neg_hid_same_t = neg_hid_same_t.squeeze()
-                    neg_hid_diff_t = neg_hid_diff_t.squeeze()
-                    pos_hid = pos_hid.squeeze()
+                    pos_hid, neg_hid_same_t, neg_hid_diff_t = all_hid[:, ~invalid_idx]
                     hidden_norm = normalize(hidden[~invalid_idx])
 
 
