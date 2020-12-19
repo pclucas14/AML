@@ -10,7 +10,9 @@ from buffer import Buffer
 from copy   import deepcopy
 from pydoc  import locate
 from model  import ResNet18,normalize, ContrastiveLoss
-from utils import naive_cross_entropy_loss, onehot, Lookahead, AverageMeter
+from utils import AverageMeter
+from utils import get_future_step_parameters,get_grad_vector,grad_vector_add,\
+    add_grad,get_future_step_parameters_with_grads,get_grad_vector_ref
 import copy
 # Arguments
 # -----------------------------------------------------------------------------------------
@@ -54,6 +56,7 @@ parser.add_argument('--incoming_neg', type=float, default=2.0)
 parser.add_argument('--buffer_neg', type=float, default=2.0)
 parser.add_argument('--augment', action='store_true')
 parser.add_argument('--task_free', action='store_true')
+parser.add_argument('--adjust', action='store_true')
 args = parser.parse_args()
 
 # Obligatory overhead
@@ -298,6 +301,24 @@ for run in range(args.n_runs):
                     loss_a = F.cross_entropy(logits_buffer, mem_y, reduction='none')
                     loss = (loss_a).sum() / loss_a.size(0)
                     loss.backward()
+
+                    if args.adjust:
+                        grad_dims = []
+                        for param in model.parameters():
+                            grad_dims.append(param.data.numel())
+                        model_temp = get_future_step_parameters_with_grads(model,args.lr)
+                        model_temp.zero_grad()
+                        model.eval()
+                        # KL=-args.kl_far *(F.softmax(model(far_mem_x).detach(), dim=1) * F.log_softmax(model_temp(far_mem_x), dim=1)).sum(dim=1).mean()
+                        KL = -1.0*F.mse_loss(normalize(hidden_buff).detach(), normalize(model_temp.return_hidden(mem_x)))
+                       # print(KL)
+                        # print("loss",float(loss),"b_loss",float(b_loss),"KL value",float(KL))
+                        KL.backward()
+                      #  meta_grad_vector = get_grad_vector_ref(model_temp.parameters)
+                      #  get_vector_grad(model.parameters, meta_grad_vector, grad_dims)
+
+                        grad_vector_add(model , model_temp)
+                        model.train()
 
                 model(data)
                 opt.step()

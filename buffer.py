@@ -25,6 +25,7 @@ class Buffer(nn.Module):
         bt = torch.LongTensor(buffer_size).fill_(0)
         bidx = torch.LongTensor(buffer_size).fill_(0)
         logits = torch.FloatTensor(buffer_size, args.n_classes).fill_(0)
+        self.class_freq=torch.FloatTensor(args.n_classes).fill_(0)
 
         self.current_index = 0
         self.n_seen_so_far = 0
@@ -142,8 +143,55 @@ class Buffer(nn.Module):
 
         self.keep = None
 
+    def fetch_pos_neg_samples2(self, label, task, idx, data=None, special=False):
+        # a sample is uniquely identifiable using `task` and `idx`
+        tmp = 1.0-self.class_freq/self.class_freq.sum()
+        tmp[tmp==1.0] = 0.0
+        class_to_use = torch.multinomial(tmp,
+                                         len(label))
+        if type(task) == int:
+            task = torch.LongTensor(label.size(0)).to(label.device).fill_(task)
 
-    def fetch_pos_neg_samples(self, label, task, idx, data=None):
+        same_label = label.view(1, -1) == self.by.view(-1, 1)  # buf_size x label_size
+        same_task = task.view(1, -1) == self.bt.view(-1, 1)  # buf_size x label_size
+        same_idx = idx.view(1, -1) == self.bidx.view(-1, 1)  # buf_size x label_size
+        same_ex = same_task & same_idx
+
+        class_use = class_to_use.view(1,-1).cuda() == self.by.view(-1,1)
+        valid_pos = same_label & ~same_ex
+        valid_neg_diff_t = ~same_label & ~same_ex & class_use
+
+        # remove points which don't have pos, neg from same and diff t
+        has_valid_pos = valid_pos.sum(0) > 0
+        has_valid_neg = valid_neg_diff_t.sum(0) > 0
+
+        invalid_idx = (~has_valid_pos | ~has_valid_neg).nonzero().squeeze()
+        if invalid_idx.numel() > 0:
+            # so the fetching operation won't fail
+            valid_pos[:, invalid_idx] = 1
+            valid_neg_diff_t[:, invalid_idx] = 1
+
+        # easier if invalid_idx is a binary tensor
+        is_invalid = torch.zeros_like(label).bool()
+        is_invalid[invalid_idx] = 1
+
+        # fetch positive samples
+        pos_idx = torch.multinomial(valid_pos.float().T, 1).squeeze(1)
+        neg_idx = torch.multinomial(valid_neg_diff_t.float().T, 1).squeeze(1)
+        xx = 1
+
+        # import ipdb; ipdb.set_trace()
+        # self.class_freq[self.by[neg_idx_same_t]]+=1
+        # self.class_freq[self.by[neg_idx_diff_t]] += 1
+        # self.class_freq[self.by[pos_idx]] += 1
+        return self.bx[pos_idx], \
+               self.bx[neg_idx], \
+               is_invalid, \
+               self.by[pos_idx], \
+               self.by[neg_idx],
+
+
+    def fetch_pos_neg_samples(self, label, task, idx, data=None,aug=False):
         # a sample is uniquely identifiable using `task` and `idx`
 
         if type(task) == int:
@@ -180,11 +228,32 @@ class Buffer(nn.Module):
         xx = 1
 
         #import ipdb; ipdb.set_trace()
-        return self.bx[pos_idx], \
-               self.bx[neg_idx_same_t], \
-               self.bx[neg_idx_diff_t], \
-               is_invalid
+        #self.class_freq[self.by[neg_idx_same_t]]+=1
+        #self.class_freq[self.by[neg_idx_diff_t]] += 1
+        #self.class_freq[self.by[pos_idx]] += 1
 
+        pos_img = self.bx[pos_idx]
+        neg_same = self.bx[neg_idx_same_t]
+        neg_diff = self.bx[neg_idx_diff_t]
+        if aug:
+            # this is sort of wrong cause its already normalized
+            # needs to be fixed somehow (unnormalized and renormanlized in th e end?>)
+
+            transform = nn.Sequential(
+                kornia.augmentation.RandomCrop(size=(32, 32), padding=4),
+                kornia.augmentation.RandomHorizontalFlip()
+            )
+            pos_img = transform(pos_img)
+            neg_same = transform(neg_same)
+            neg_diff = transform(neg_diff)
+
+        return pos_img, \
+               neg_same, \
+               neg_diff, \
+               is_invalid, \
+               self.by[pos_idx], \
+               self.by[neg_idx_same_t], \
+               self.by[neg_idx_diff_t]
 
     def sample(self, amt, exclude_task = None, ret_ind = False, aug=False):
         if exclude_task is not None:
@@ -208,6 +277,8 @@ class Buffer(nn.Module):
         else:
             indices = torch.from_numpy(np.random.choice(bx.size(0), amt, replace=False))
             indices = indices.to(self.bx.device)
+
+            #self.class_freq[self.by[indices]]+=1
 
             if aug:
                 # this is sort of wrong cause its already normalized

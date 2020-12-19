@@ -473,8 +473,8 @@ def get_split_cifar10(args):
 def get_miniimagenet(args):
     ROOT_PATH = '/home/eugene//data/filelists/miniImagenet/materials/images'
     ROOT_PATH_CSV = '/home/eugene//data/filelists/miniImagenet/materials'
-    ROOT_PATH = '/private/home/lucaspc/repos/datasets/miniimagenet/images'
-    ROOT_PATH_CSV = '/private/home/lucaspc/repos/datasets/miniimagenet/splits'
+  #  ROOT_PATH = '/private/home/lucaspc/repos/datasets/miniimagenet/images'
+   # ROOT_PATH_CSV = '/private/home/lucaspc/repos/datasets/miniimagenet/splits'
 
     if args.n_tasks == -1:
         args.n_tasks = 20

@@ -240,106 +240,6 @@ import torch
 # from loguru import logger
 
 
-class SelectiveBackPropagation:
-    """
-    Selective_Backpropagation from paper Accelerating Deep Learning by Focusing on the Biggest Losers
-    https://arxiv.org/abs/1910.00762v1
-    Without:
-            ...
-            criterion = nn.CrossEntropyLoss(reduction='none')
-            ...
-            for x, y in data_loader:
-                ...
-                y_pred = model(x)
-                loss = criterion(y_pred, y).mean()
-                loss.backward()
-                ...
-    With:
-            ...
-            criterion = nn.CrossEntropyLoss(reduction='none')
-            selective_backprop = SelectiveBackPropagation(
-                                    criterion,
-                                    lambda loss : loss.mean().backward(),
-                                    model,
-                                    batch_size,
-                                    epoch_length=len(data_loader),
-                                    loss_selection_threshold=False)
-            ...
-            for x, y in data_loader:
-                ...
-                with torch.no_grad():
-                    y_pred = model(x)
-                not_reduced_loss = criterion(y_pred, y)
-                selective_backprop.selective_back_propagation(not_reduced_loss, x, y)
-                ...
-    """
-    def __init__(self, batch_size, epoch_length, loss_selection_threshold=False):
-        """
-        Usage:
-        ```
-        criterion = nn.CrossEntropyLoss(reduction='none')
-        selective_backprop = SelectiveBackPropagation(
-                                    lambda loss : loss.mean().backward(),
-                                    model,
-                                    batch_size,
-                                    epoch_length=len(data_loader),
-                                    loss_selection_threshold=False)
-        ```
-        :param compute_losses_func: the loss function which output a tensor of dim [batch_size] (no reduction to apply).
-        Example: `compute_losses_func = nn.CrossEntropyLoss(reduction='none')`
-        :param update_weights_func: the reduction of the loss and backpropagation. Example: `update_weights_func =
-        lambda loss : loss.mean().backward()`
-        :param optimizer: your optimizer object
-        :param model: your model object
-        :param batch_size: number of images per batch
-        :param epoch_length: the number of batch per epoch
-        :param loss_selection_threshold: default to False. Set to a float value to select all images with with loss
-        higher than loss_selection_threshold. Do not change behavior for loss below loss_selection_threshold.
-        """
-
-        self.loss_selection_threshold = loss_selection_threshold
-        self.batch_size = batch_size
-
-        self.loss_hist = collections.deque([], maxlen=batch_size*epoch_length)
-        self.selected_inputs, self.selected_targets = [], []
-
-    def selective_back_propagation_idx(self, loss_per_img,stats_only=False):
-        effective_batch_loss = None
-
-        cpu_losses = loss_per_img.detach().clone().cpu()
-        self.loss_hist.extend(cpu_losses.tolist())
-        if stats_only:
-            return
-        np_cpu_losses = cpu_losses.numpy()
-        selection_probabilities = self._get_selection_probabilities(np_cpu_losses)
-
-        selection = selection_probabilities > np.random.random(*selection_probabilities.shape)
-
-        if self.loss_selection_threshold:
-            higher_thres = np_cpu_losses > self.loss_selection_threshold
-            selection = np.logical_or(higher_thres, selection)
-
-        return selection
-
-    def _get_selection_probabilities(self, loss):
-        percentiles = self._percentiles(self.loss_hist, loss)
-        return percentiles ** 2
-
-    def _percentiles(self, hist_values, values_to_search):
-        # TODO Speed up this again. There is still a visible overhead in training.
-        hist_values, values_to_search = np.asarray(hist_values), np.asarray(values_to_search)
-
-        percentiles_values = np.percentile(hist_values, range(100))
-        sorted_loss_idx = sorted(range(len(values_to_search)), key=lambda k: values_to_search[k])
-        counter = 0
-        percentiles_by_loss = [0] * len(values_to_search)
-        for idx, percentiles_value in enumerate(percentiles_values):
-            while values_to_search[sorted_loss_idx[counter]] < percentiles_value:
-                percentiles_by_loss[sorted_loss_idx[counter]] = idx
-                counter += 1
-                if counter == len(values_to_search) : break
-            if counter == len(values_to_search) : break
-        return np.array(percentiles_by_loss)/100
 
 
 from collections import defaultdict
@@ -425,3 +325,95 @@ def sho_(x, nrow=8):
 
     save_image(x, 'tmp.png', nrow=nrow)
     Image.open('tmp.png').show()
+
+def add_grad(pp, new_grad, grad_dims):
+    """
+        This is used to overwrite the gradients with a new gradient
+        vector, whenever violations occur.
+        pp: parameters
+        newgrad: corrected gradient
+        grad_dims: list storing number of parameters at each layer
+    """
+    cnt = 0
+    for param in pp():
+        #param.grad=torch.zeros_like(param.data)
+        beg = 0 if cnt == 0 else sum(grad_dims[:cnt])
+        en = sum(grad_dims[:cnt + 1])
+        this_grad = new_grad[beg: en].contiguous().view(
+            param.data.size())
+
+        param.grad.data.add_(this_grad)
+        cnt += 1
+
+def grad_vector_add(model_target,model_source):
+    """
+     gather the gradients in one vector, without copy
+    """
+    for name, param in model_target.named_parameters():
+        for namex, paramx in model_source.named_parameters():
+            if namex==name:
+                if paramx.grad is None and namex=='linear.L.weight':
+                    #this happens for the linear layer but be careful to not miss all
+                    continue
+                param.grad.data.add_(paramx.grad.data)
+
+
+
+def get_grad_vector(args, pp, grad_dims):
+    """
+     gather the gradients in one vector
+    """
+    grads = torch.Tensor(sum(grad_dims))
+    if args.cuda: grads = grads.cuda()
+
+    grads.fill_(0.0)
+    cnt = 0
+    for param in pp():
+        if param.grad is not None:
+            beg = 0 if cnt == 0 else sum(grad_dims[:cnt])
+            en = sum(grad_dims[:cnt + 1])
+            grads[beg: en].copy_(param.grad.data.view(-1))
+        cnt += 1
+    return grads
+
+def get_grad_vector_ref(pp):
+    """
+     gather the gradients in one vector, without copy
+    """
+    grads = []
+    for param in pp():
+        if param.grad is not None:
+            grads.append(param.grad.data.view(-1))
+    grads = torch.cat(grads)
+    return grads
+
+def get_future_step_parameters(this_net,grad_vector,grad_dims,lr=1):
+    """
+    computes \theta-\delta\theta
+    :param this_net:
+    :param grad_vector:
+    :return:
+    """
+    new_net=copy.deepcopy(this_net)
+    overwrite_grad(new_net.parameters,grad_vector,grad_dims)
+    with torch.no_grad():
+        for param in new_net.parameters():
+            if param.grad is not None:
+
+                param.data=param.data - lr*param.grad.data
+    return new_net
+
+def get_future_step_parameters_with_grads(this_net,lr=1):
+    """
+    computes \theta-\delta\theta
+    :param this_net:
+    :param grad_vector:
+    :return:
+    """
+    new_net=copy.deepcopy(this_net)
+    #new_net=this_net
+    for name, param in this_net.named_parameters():
+        for namex, paramx in new_net.named_parameters():
+            if namex==name:
+                paramx.data=param.data - lr*param.grad.data
+    return new_net
