@@ -256,11 +256,13 @@ for run in range(args.n_runs):
                             buffer.fetch_pos_neg_samples(target, task, idx, data=data, aug=args.augment)
 
                     all_xs  = torch.cat((pos_x, neg_x_same_t, neg_x_diff_t))
+
                     all_hid = model.return_hidden(all_xs).reshape(3, pos_x.size(0), -1)
                     pos_hid, neg_hid_same_t, neg_hid_diff_t = all_hid[:, ~invalid_idx].chunk(3)
                     neg_hid_same_t = normalize(neg_hid_same_t.squeeze())
                     neg_hid_diff_t = normalize(neg_hid_diff_t.squeeze())
                     pos_hid = normalize(pos_hid.squeeze())
+
                     hidden_norm = normalize(hidden[~invalid_idx])
 
 
