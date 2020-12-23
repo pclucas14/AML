@@ -50,7 +50,7 @@ class CLDataLoader(object):
 
         self.datasets = datasets_per_task
         self.loaders = [
-                torch.utils.data.DataLoader(x, batch_size=bs, shuffle=True, drop_last=train, num_workers=0)
+                torch.utils.data.DataLoader(x, batch_size=bs, shuffle=True, drop_last=train, num_workers=8)
                 for x in self.datasets ]
 
     def __getitem__(self, idx):
@@ -473,8 +473,8 @@ def get_split_cifar10(args):
 def get_miniimagenet(args):
     ROOT_PATH = '/home/eugene//data/filelists/miniImagenet/materials/images'
     ROOT_PATH_CSV = '/home/eugene//data/filelists/miniImagenet/materials'
-    ROOT_PATH = '/private/home/lucaspc/repos/datasets/miniimagenet/images'
-    ROOT_PATH_CSV = '/private/home/lucaspc/repos/datasets/miniimagenet/splits'
+    ROOT_PATH = '/private/home/lucaspc/repos/data/miniimagenet/images'
+    ROOT_PATH_CSV = '/private/home/lucaspc/repos/data/miniimagenet/splits'
 
     if args.n_tasks == -1:
         args.n_tasks = 20

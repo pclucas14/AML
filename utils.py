@@ -194,7 +194,7 @@ def logging_per_task(wandb, log, run, mode, metric, task=0, task_t=0, value=0):
 
     if wandb is not None:
         if 'final' in metric:
-            wandb.log({mode+metric:value}, step=run)
+            wandb.log({mode+metric:value}) #, step=run)
 
 def print_(log, mode, task):
     to_print = mode + ' ' + str(task) + ' '

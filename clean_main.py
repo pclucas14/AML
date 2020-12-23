@@ -12,21 +12,19 @@ from pydoc  import locate
 from model  import ResNet18,normalize, ContrastiveLoss
 from utils import naive_cross_entropy_loss, onehot, Lookahead, AverageMeter
 import copy
+
 # Arguments
 # -----------------------------------------------------------------------------------------
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--result_dir', type=str, default='Results',
-    help='directory where we save results and samples')
 parser.add_argument('-u', '--unit_test', action='store_true',
     help='unit testing mode for fast debugging')
 parser.add_argument('-d', '--dataset', type=str, default = 'split_cifar10',
     choices=['split_mnist', 'permuted_mnist', 'split_cifar10', 'split_cifar100', 'miniimagenet'])
 parser.add_argument('--n_tasks', type=int, default=-1,
     help='total number of tasks. -1 does default amount for the dataset')
-parser.add_argument('-r','--reproc', type=int, default=1,
+parser.add_argument('-r','--reproc', type=int, default=0,
     help='if on, no randomness in numpy and torch')
-parser.add_argument('--disc_epochs', type=int, default=1)
 parser.add_argument('--disc_iters', type=int, default=1,
     help='number of training iterations for the classifier')
 parser.add_argument('--batch_size', type=int, default=10)
@@ -38,14 +36,13 @@ parser.add_argument('--n_runs', type=int, default=1,
     help='number of runs to average performance')
 parser.add_argument('--suffix', type=str, default='',
     help="name for logfile")
-parser.add_argument('--print_every', type=int, default=500,
-    help="print metrics every this iteration")
 # logging
 parser.add_argument('-l', '--log', type=str, default='off', choices=['off', 'online'],
     help='enable WandB logging')
 parser.add_argument('--wandb_project', type=str, default='er_imbalance',
     help='name of the WandB project')
-parser.add_argument('--mask_vers', type=int, default=1)
+parser.add_argument('--exp_name', type=str, default='tmp')
+
 #------ MIR -----#
 parser.add_argument('-m','--method', type=str, default='er', choices=['er', 'mask', 'triplet'])
 parser.add_argument('--lr', type=float, default=0.1)
@@ -58,12 +55,6 @@ args = parser.parse_args()
 
 # Obligatory overhead
 # -----------------------------------------------------------------------------------------
-
-if not os.path.exists(args.result_dir): os.mkdir(args.result_dir)
-sample_path = os.path.join(args.result_dir,'samples/')
-if not os.path.exists(sample_path): os.mkdir(sample_path)
-recon_path = os.path.join(args.result_dir,'reconstructions/')
-if not os.path.exists(recon_path): os.mkdir(recon_path)
 
 args.cuda = torch.cuda.is_available()
 args.device = 'cuda:0'
@@ -95,7 +86,7 @@ train_loader, val_loader, test_loader  = [CLDataLoader(elem, args, train=t) \
 
 if args.log != 'off':
     import wandb
-    wandb.init(project=args.wandb_project+'_'+args.dataset, name=args.suffix)
+    wandb.init(project=args.wandb_project, name=args.exp_name, config=args)
     wandb.config.update(args)
 else:
     wandb = None
@@ -175,7 +166,6 @@ for run in range(args.n_runs):
 
     opt = torch.optim.SGD(model.parameters(), lr=args.lr)
 
-    # new_buffer = NewBuffer(args.input_size, args.n_classes, args.mem_size).to(args.device)
     buffer = Buffer(args).to(args.device)
     if run == 0:
         print("number of classifier parameters:",
@@ -187,13 +177,7 @@ for run in range(args.n_runs):
     # Task Loop
     for task, tr_loader in enumerate(train_loader):
         sample_amt = 0
-
-        contrastive = ContrastiveLoss(margin=0.6)
-
-        last_mask = tr_loader.dataset.mask
-
         model = model.train()
-        old_class_mask = deepcopy(mask_so_far)
 
         #---------------
         # Minibatch Loop
@@ -243,9 +227,11 @@ for run in range(args.n_runs):
                     logits = model.linear(hidden)
                     logits = logits.masked_fill(mask == 0, -1e9)
                     loss = F.cross_entropy(logits, target)
+
                 elif task == 0 or args.method == 'er':
                     logits = model.linear(hidden)
                     loss = F.cross_entropy(logits, target)
+
                 elif args.method == 'triplet':
                     # fetch the constrasting points
                     pos_x, neg_x_same_t, neg_x_diff_t, invalid_idx = \
@@ -256,24 +242,14 @@ for run in range(args.n_runs):
                     pos_hid, neg_hid_same_t, neg_hid_diff_t = all_hid[:, ~invalid_idx]
                     hidden_norm = normalize(hidden[~invalid_idx])
 
-
-                    if hidden_norm.shape[0] > 0:
-                   #     print(hidden_norm.shape)
-                    #    print(neg_hid_same_t.shape)
-                     #   print(normalize(model.linear.L.weight[target[~invalid_idx]]).shape)
-                        loss = args.incoming_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_same_t, 0.2)
-
-                        loss += 0.0 * F.triplet_margin_loss(hidden_norm,
-                                                            normalize(model.linear.L.weight[target[~invalid_idx]]),
-                                                            neg_hid_same_t, 0.05)
+                    if (~invalid_idx).any():
+                        loss  = args.incoming_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_same_t, 0.2)
                         loss += args.buffer_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_diff_t, 0.2)
                     else:
                         update = False
 
-                else:
-                    assert False
-
                 opt.zero_grad()
+
                 if update:
                     loss.backward(retain_graph=True)
 
@@ -287,7 +263,7 @@ for run in range(args.n_runs):
                     loss = (loss_a).sum() / loss_a.size(0)
                     loss.backward()
 
-                model(data)
+                # model(data)
                 opt.step()
 
             # make sure we don't exceed the memory requirements
