@@ -112,12 +112,13 @@ def get_permuted_mnist(args):
 def get_split_cifar100(args):
     # assert args.n_tasks in [5, 10], 'SplitCifar only works with 5 or 10 tasks'
     assert '1.' in str(torch.__version__)[:2], 'Use Pytorch 1.x!'
-   # args.n_tasks   = 17
-    args.n_tasks=20
+    if args.n_tasks == -1:
+        args.n_tasks = 20
+
     #args.multiple_heads = True
     args.multiple_heads = False
     args.n_classes = 100
-    args.n_classes_per_task = 5
+    args.n_classes_per_task = args.n_classes // args.n_tasks
     args.input_size = [3, 32, 32]
     args.input_type = 'continuous'
 
@@ -214,7 +215,7 @@ def get_split_cifar100(args):
     test_ds = test_ds[:20]
     # build masks
     masks = []
-    task_ran=20
+    task_ran= args.n_tasks
     task_ids = [None for _ in range(task_ran)]
     for task, task_data in enumerate(train_ds):
         labels = task_data[1].unique().long()
@@ -224,6 +225,7 @@ def get_split_cifar100(args):
         mask[labels] = 1
         masks += [mask]
         task_ids[task] = labels
+
     task_ids = torch.stack(task_ids).to(args.device)
     #task_ids = torch.stack(task_ids).long()to(args.device).long()
     train_ds, val_ds = make_valid_from_train(train_ds)
@@ -450,7 +452,7 @@ def get_split_cifar10(args):
         test_ds  += [(test_x[te_s:te_e],  test_y[te_s:te_e])]
 
     masks = []
-    task_ran = 5
+    task_ran = args.n_tasks
     task_ids = [None for _ in range(task_ran)]
     for task, task_data in enumerate(train_ds):
         labels = task_data[1].unique().long()
@@ -460,6 +462,7 @@ def get_split_cifar10(args):
         mask[labels] = 1
         masks += [mask]
         task_ids[task] = labels
+
     task_ids = torch.stack(task_ids).to(args.device)
 
     train_ds, val_ds = make_valid_from_train(train_ds)
@@ -475,6 +478,8 @@ def get_miniimagenet(args):
     ROOT_PATH_CSV = '/home/eugene//data/filelists/miniImagenet/materials'
     ROOT_PATH = '/private/home/lucaspc/repos/data/miniimagenet/images'
     ROOT_PATH_CSV = '/private/home/lucaspc/repos/data/miniimagenet/splits'
+    ROOT_PATH = '../cl-pytorch/data/imagenet/images'
+    ROOT_PATH_CSV = '../prototypical-network-pytorch/materials'
 
     if args.n_tasks == -1:
         args.n_tasks = 20
