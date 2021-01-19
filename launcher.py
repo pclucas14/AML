@@ -12,12 +12,12 @@ config = {
         '--method': ['er', 'triplet', 'mask']
         }
 
-cmd  = 'python clean_main.py --log online --reproc 0'
+cmd  = 'python clean_main.py --log online --reproc 0 --disc_iters 3'
 
 n_runs = 20
 
 log_dir = '/home/ml/users/lpagec/pytorch/mask-trick/results_hp1'
-run_list_file = os.path.join(log_dir, 'run_list.csv')
+run_list_file = os.path.join(log_dir, 'run_list2.csv')
 # check if config file has already been made
 
 if not os.path.exists(run_list_file):
@@ -44,7 +44,6 @@ if not os.path.exists(run_list_file):
 while True:
     # open the file
     run_list = pd.read_csv(run_list_file)
-
     if sum(run_list['n_runs']) <= 0:
         exit()
 
@@ -62,7 +61,7 @@ while True:
             exp_name += f'_{v}'
 
     # exp name
-    run_cmd += f' --exp_name HP1{exp_name[1:]}'
+    run_cmd += f' --exp_name HP1{exp_name[1:]}_iters3'
 
     # execute command
     value = os.system(run_cmd)
@@ -70,7 +69,7 @@ while True:
         print('FAILURE')
         exit()
 
-    # once done, decreate counter
+    # once done, decrease counter
     run_list = pd.read_csv(run_list_file)
     run_list.at[run_id, 'n_runs'] -= 1
     run_list.to_csv(run_list_file, index=False)

@@ -28,6 +28,7 @@ class Buffer(nn.Module):
 
         self.current_index = 0
         self.n_seen_so_far = 0
+        self.input_size    = input_size
 
         # registering as buffer allows us to save the object using `torch.save`
         self.register_buffer('bx', bx)
@@ -214,7 +215,7 @@ class Buffer(nn.Module):
                 # needs to be fixed somehow (unnormalized and renormanlized in th e end?>)
 
                 transform = nn.Sequential(
-                    kornia.augmentation.RandomCrop(size=(32,32),padding=4),
+                        kornia.augmentation.RandomCrop(size=self.input_size[1:],padding=4),
                     kornia.augmentation.RandomHorizontalFlip()
                 )
                 ret = transform(bx[indices])
