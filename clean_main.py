@@ -1,4 +1,5 @@
 import argparse
+import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import random
@@ -9,7 +10,7 @@ from utils  import get_logger, get_temp_logger, logging_per_task, sho_
 from buffer import Buffer
 from copy   import deepcopy
 from pydoc  import locate
-from model  import ResNet18,normalize, ContrastiveLoss
+from model  import ResNet18, normalize
 from utils import naive_cross_entropy_loss, onehot, Lookahead, AverageMeter
 import copy
 
@@ -44,14 +45,86 @@ parser.add_argument('--wandb_project', type=str, default='er_imbalance',
 parser.add_argument('--exp_name', type=str, default='tmp')
 
 #------ MIR -----#
-parser.add_argument('-m','--method', type=str, default='er', choices=['er', 'mask', 'triplet'])
+parser.add_argument('-m','--method', type=str, default='icarl', choices=['icarl', 'er', 'mask', 'triplet', 'iid', 'iid++'])
 parser.add_argument('--lr', type=float, default=0.1)
 
 parser.add_argument('--incoming_neg', type=float, default=2.0)
-parser.add_argument('--buffer_neg', type=float, default=2.0)
+parser.add_argument('--buffer_neg', type=float, default=0)
+parser.add_argument('--margin', type=float, default=0.2)
+parser.add_argument('--use_augmentations', type=int, default=0)
+
+parser.add_argument('--icarl_gamma', type=float, default=0.9)
 
 parser.add_argument('--task_free', action='store_true')
 args = parser.parse_args()
+
+
+if args.method in ['iid', 'iid++']:
+    print('overwriting args for iid setup')
+    args.n_tasks = 1
+    args.mem_size = 1
+
+# ICarl Wrapper
+# ----------------------------------------------------------------------------------------
+class ICarl(nn.Module):
+    def __init__(self, net, gamma=0.9):
+        super().__init__()
+
+        self.net = net
+        dev = next(net.parameters()).device
+        # we will just use the last final connected layer as class prototypes
+        self.arr = torch.arange(self.net.linear.L.weight.size(1)).to(dev)
+        self.dev = dev
+
+        self.gamma = gamma
+
+    def update_proto(self, hid, y):
+        # normalize feature vectors
+        hid = F.normalize(hid, p=2, dim=-1)
+        D   = hid.size(-1)
+
+        old_proto = self.net.linear.L.weight
+        n_classes = old_proto.size(0)
+
+        correct = hid.new_zeros(size=(n_classes, D))
+        for i in range(10):
+            correct[i] += hid[y == i].sum(0)
+
+        # let's just do it in one-d
+        out_idx = self.arr.view(1, -1) + y.view(-1, 1) * D
+
+        buf = hid.new_zeros(size=(n_classes, hid.size(-1)))
+        buf = buf.flatten().scatter_add(0, out_idx.flatten(), hid.flatten()).view_as(buf)
+
+        # update the ones we saw in memory
+        update_mask = buf.new_zeros(size=(n_classes,), dtype=torch.bool, device=self.dev)
+        update_mask[y.unique()] = 1
+        update_mask = update_mask.view(-1, 1)
+
+        new_proto = old_proto * self.gamma + buf * (1 - self.gamma)
+        new_proto = update_mask * new_proto + ~update_mask * old_proto
+
+        new_proto = F.normalize(new_proto, p=2, dim=-1)
+
+        # set new points
+        self.net.linear.L.weight.data.copy_(new_proto.data)
+
+
+    def get_logits(self, hid):
+        # n_c x d
+        proto = self.net.linear.L.weight
+
+        #b_s x d for hid
+
+        # b_s x n_c
+        dist = (proto.unsqueeze(0) - hid.unsqueeze(1)).pow(2).sum(-1)
+
+        return -dist
+
+    def forward(self, x):
+        hid = self.net.return_hidden(x)
+        return self.get_logits(hid)
+
 
 # Obligatory overhead
 # -----------------------------------------------------------------------------------------
@@ -160,9 +233,13 @@ for run in range(args.n_runs):
 
     # CLASSIFIER
     model = ResNet18(args.n_classes, nf=20, input_size=args.input_size)
+
     if args.cuda:
         model = model.to(args.device)
     model.train()
+
+    if args.method == 'icarl':
+        icarl = ICarl(model, gamma=args.icarl_gamma)
 
     opt = torch.optim.SGD(model.parameters(), lr=args.lr)
 
@@ -178,6 +255,9 @@ for run in range(args.n_runs):
     for task, tr_loader in enumerate(train_loader):
         sample_amt = 0
         model = model.train()
+
+        if args.method == 'iid++':
+            other_tr_loader = iter(torch.utils.data.DataLoader(tr_loader.dataset, batch_size=args.batch_size, num_workers=8))
 
         #---------------
         # Minibatch Loop
@@ -205,6 +285,7 @@ for run in range(args.n_runs):
             target_orig= copy.deepcopy(target)
             for it in range(args.disc_iters):
                 rehearse = (task + i) > 0 if args.task_free else task > 0
+                rehearse = rehearse and ~(args.method in ['iid', 'iid++'])
 
                 target = copy.deepcopy(target_orig)
                 hidden = model.return_hidden(data)
@@ -212,7 +293,7 @@ for run in range(args.n_runs):
                 # mask logits not present in batch
                 present = target.unique()
                 if mask_so_far is not None:
-                    mask_so_far = torch.cat([mask_so_far,present]).unique()
+                    mask_so_far = torch.cat([mask_so_far, present]).unique()
                 else:
                     mask_so_far = present
 
@@ -221,14 +302,16 @@ for run in range(args.n_runs):
                 update = True
                 if args.method == 'mask':
                     mask[:, present] = 1
+
                     if mask_so_far.max() < args.n_classes-1:
-                        mask[:,mask_so_far.max():]=1
+                        mask[:,mask_so_far.max():] = 1
+
                     mask = mask.cuda()
                     logits = model.linear(hidden)
                     logits = logits.masked_fill(mask == 0, -1e9)
                     loss = F.cross_entropy(logits, target)
 
-                elif task == 0 or args.method == 'er':
+                elif task == 0 or args.method == 'er' or 'iid' in args.method:
                     logits = model.linear(hidden)
                     loss = F.cross_entropy(logits, target)
 
@@ -237,16 +320,27 @@ for run in range(args.n_runs):
                     pos_x, neg_x_same_t, neg_x_diff_t, invalid_idx = \
                             buffer.fetch_pos_neg_samples(target, task, idx, data=data)
 
-                    all_xs  = torch.cat((pos_x, neg_x_same_t, neg_x_diff_t))
-                    all_hid = normalize(model.return_hidden(all_xs)).reshape(3, pos_x.size(0), -1)
-                    pos_hid, neg_hid_same_t, neg_hid_diff_t = all_hid[:, ~invalid_idx]
+                    if args.buffer_neg > 0:
+                        all_xs  = torch.cat((pos_x, neg_x_same_t, neg_x_diff_t))
+                        all_hid = normalize(model.return_hidden(all_xs)).reshape(3, pos_x.size(0), -1)
+                        pos_hid, neg_hid_same_t, neg_hid_diff_t = all_hid[:, ~invalid_idx]
+                    else:
+                        all_xs  = torch.cat((pos_x, neg_x_same_t))
+                        all_hid = normalize(model.return_hidden(all_xs)).reshape(2, pos_x.size(0), -1)
+                        pos_hid, neg_hid_same_t= all_hid[:, ~invalid_idx]
+
                     hidden_norm = normalize(hidden[~invalid_idx])
 
                     if (~invalid_idx).any():
-                        loss  = args.incoming_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_same_t, 0.2)
-                        loss += args.buffer_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_diff_t, 0.2)
+                        loss  = args.incoming_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_same_t, args.margin)
+                        if args.buffer_neg > 0:
+                            loss += args.buffer_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_diff_t, args.margin)
                     else:
                         update = False
+
+                elif args.method == 'icarl':
+                    logits = icarl.get_logits(hidden)
+                    loss   = F.cross_entropy(logits, target)
 
                 opt.zero_grad()
 
@@ -254,8 +348,11 @@ for run in range(args.n_runs):
                     loss.backward(retain_graph=True)
 
                 if rehearse:
-                    mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, aug=False, ret_ind=True)#, exclude_task=task)
+                    mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, aug=args.use_augmentations, ret_ind=True)#, exclude_task=task)
                     hidden_buff = model.return_hidden(mem_x)
+
+                    if args.method == 'icarl':
+                        logits_buffer = icarl.get_logits(hidden_buff)
 
                     logits_buffer = model.linear(hidden_buff)
 
@@ -263,14 +360,32 @@ for run in range(args.n_runs):
                     loss = (loss_a).sum() / loss_a.size(0)
                     loss.backward()
 
-                # model(data)
+                if args.method == 'iid++':
+                    try:
+                        x2, y2, _ = next(other_tr_loader)
+                    except StopIteration:
+                        other_tr_loader = iter(torch.utils.data.DataLoader(tr_loader.dataset, batch_size=args.batch_size, num_workers=8))
+                        x2, y2, _ = next(other_tr_loader)
+
+                    x2, y2 = x2.to(args.device), y2.to(args.device)
+                    F.cross_entropy(model(x2), y2).backward()
+
                 opt.step()
+
+                if args.method == 'icarl':
+                    hids, ys = hidden, target
+                    if rehearse:
+                        hids = torch.cat((hids, hidden_buff))
+                        ys   = torch.cat((ys, mem_y))
+
+                    icarl.update_proto(hids, ys)
 
             # make sure we don't exceed the memory requirements
             buffer.balance_memory()
 
         print(f'buf {buffer.bx.size(0)}')
-        eval_model(model, val_loader, task)
+        # eval_model(icarl if args.method == 'icarl' else model, val_loader, task, model='valid')
+        eval_model(icarl if args.method == 'icarl' else model, test_loader, task, mode='test')
 
 
     # final run results
