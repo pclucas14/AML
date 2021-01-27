@@ -32,7 +32,7 @@ parser.add_argument('--batch_size', type=int, default=10)
 parser.add_argument('--buffer_batch_size', type=int, default=10)
 parser.add_argument('--samples_per_task', type=int, default=-1,
     help='if negative, full dataset is used')
-parser.add_argument('--mem_size', type=int, default=600, help='controls buffer size')
+parser.add_argument('--mem_size', type=int, default=20, help='controls buffer size')
 parser.add_argument('--n_runs', type=int, default=1,
     help='number of runs to average performance')
 parser.add_argument('--suffix', type=str, default='',
@@ -55,7 +55,7 @@ parser.add_argument('--use_augmentations', type=int, default=0)
 
 parser.add_argument('--icarl_gamma', type=float, default=0.9)
 
-parser.add_argument('--task_free', action='store_true')
+parser.add_argument('--task_free', type=int, default=0)
 args = parser.parse_args()
 
 
@@ -128,6 +128,8 @@ class ICarl(nn.Module):
 
 # Obligatory overhead
 # -----------------------------------------------------------------------------------------
+if args.method == 'triplet':
+    args.task_free = 1
 
 args.cuda = torch.cuda.is_available()
 args.device = 'cuda:0'
@@ -284,7 +286,7 @@ for run in range(args.n_runs):
             # Iteration Loop
             target_orig= copy.deepcopy(target)
             for it in range(args.disc_iters):
-                rehearse = (task + i) > 0 if args.task_free else task > 0
+                rehearse = task > 0 #(task + i) > 0 if args.task_free else task > 0
                 rehearse = rehearse and ~(args.method in ['iid', 'iid++'])
 
                 target = copy.deepcopy(target_orig)
@@ -318,7 +320,7 @@ for run in range(args.n_runs):
                 elif args.method == 'triplet':
                     # fetch the constrasting points
                     pos_x, neg_x_same_t, neg_x_diff_t, invalid_idx = \
-                            buffer.fetch_pos_neg_samples(target, task, idx, data=data)
+                            buffer.fetch_pos_neg_samples(target, task, idx, data=data, task_free=args.task_free)
 
                     if args.buffer_neg > 0:
                         all_xs  = torch.cat((pos_x, neg_x_same_t, neg_x_diff_t))
@@ -348,7 +350,25 @@ for run in range(args.n_runs):
                     loss.backward(retain_graph=True)
 
                 if rehearse:
-                    mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, aug=args.use_augmentations, ret_ind=True)#, exclude_task=task)
+                    if args.task_free:
+                        exclude_task = None
+                        exclude_labels = target.unique()
+                    else:
+                        exclude_task = task
+                        exclude_labels = None
+
+                    # never use task info for triplet and mask
+                    if args.method in ['mask', 'triplet']:
+                        exclude_task = exclude_labels = None
+
+                    mem_x, mem_y, bt, inds = buffer.sample(
+                            args.buffer_batch_size,
+                            aug=args.use_augmentations,
+                            ret_ind=True,
+                            exclude_task=exclude_task,
+                            exclude_labels=exclude_labels
+                    )
+
                     hidden_buff = model.return_hidden(mem_x)
 
                     if args.method == 'icarl':
@@ -381,9 +401,11 @@ for run in range(args.n_runs):
                     icarl.update_proto(hids, ys)
 
             # make sure we don't exceed the memory requirements
+            before = buffer.bx.size(0)
             buffer.balance_memory()
+            after = buffer.bx.size(0)
+            print(f'buf {before} --> {after}')
 
-        print(f'buf {buffer.bx.size(0)}')
         # eval_model(icarl if args.method == 'icarl' else model, val_loader, task, model='valid')
         eval_model(icarl if args.method == 'icarl' else model, test_loader, task, mode='test')
 
