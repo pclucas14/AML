@@ -114,6 +114,8 @@ class Buffer(nn.Module):
             self.bt = torch.cat((self.bt, torch.zeros_like(y).fill_(t)))
             self.bidx = torch.cat((self.bidx, idx))
 
+            assert self.by.size() == self.bt.size(), pdb.set_trace()
+
             keep = torch.ones_like(self.by)
             keep[idx_buffer] = 0
             keep[del_new_data] = 0
@@ -127,6 +129,9 @@ class Buffer(nn.Module):
                 keep[also] = 0
 
             assert keep.sum() == self.args.mem_size, pdb.set_trace()
+
+            # TODO: remove 122 for this one
+            # self.keep = keep.bool()
 
         if save_logits:
             self.logits[idx_buffer] = logits[idx_new_data]
@@ -144,16 +149,28 @@ class Buffer(nn.Module):
         self.keep = None
 
 
-    def fetch_pos_neg_samples(self, label, task, idx, data=None):
+    def fetch_pos_neg_samples(self, label, task, idx, data=None, task_free=True):
         # a sample is uniquely identifiable using `task` and `idx`
 
         if type(task) == int:
             task = torch.LongTensor(label.size(0)).to(label.device).fill_(task)
 
-        same_label = label.view(1, -1) == self.by.view(-1, 1)   # buf_size x label_size
+        same_label = label.view(1, -1) == self.by.view(-1, 1)    # buf_size x label_size
         same_task  = task.view(1, -1)  == self.bt.view(-1, 1)    # buf_size x label_size
-        same_idx   = idx.view(1, -1)   == self.bidx.view(-1, 1) # buf_size x label_size
+        same_idx   = idx.view(1, -1)   == self.bidx.view(-1, 1)  # buf_size x label_size
         same_ex    = same_task & same_idx
+
+        task_labels = label.unique()
+        real_same_task = same_task
+
+        # TASK FREE METHOD : instead of using the task ID, we'll use labels in
+        # the current batch to mimic task
+        if task_free:
+            same_task = torch.zeros_like(same_task)
+
+            for label_ in task_labels:
+                label_exp = label_.view(1, -1).expand_as(same_task)
+                same_task = same_task | (label_exp == self.by.view(-1, 1))
 
         valid_pos  = same_label & ~same_ex
         valid_neg_same_t = ~same_label & same_task & ~same_ex
@@ -187,9 +204,22 @@ class Buffer(nn.Module):
                is_invalid
 
 
-    def sample(self, amt, exclude_task = None, ret_ind = False, aug=False):
+    def sample(self, amt, exclude_task=None, exclude_labels=None, ret_ind=False, aug=False):
+        assert not (exclude_task is not None and exclude_labels is not None)
+
         if exclude_task is not None:
             valid_indices = (self.t != exclude_task)
+            valid_indices = valid_indices.nonzero().squeeze()
+            bx = self.bx[valid_indices]
+            by = self.by[valid_indices]
+            bt = self.bt[valid_indices]
+            bidx = self.bidx[valid_indices]
+        elif exclude_labels is not None:
+            # all true tensor
+            valid_indices = self.bt > -1
+            for label in exclude_labels:
+                valid_indices = valid_indices & (self.by != label)
+
             valid_indices = valid_indices.nonzero().squeeze()
             bx = self.bx[valid_indices]
             by = self.by[valid_indices]
