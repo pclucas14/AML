@@ -127,6 +127,7 @@ def get_split_cifar100(args):
     train = datasets.CIFAR100('../cl-pytorch/data/', train=True,  download=True)
     test  = datasets.CIFAR100('../cl-pytorch/data/', train=False, download=True)
 
+    import pdb; pdb.set_trace()
     try:
         train_x, train_y = train.data, train.targets
         test_x, test_y = test.data, test.targets

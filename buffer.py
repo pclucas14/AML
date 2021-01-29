@@ -119,7 +119,7 @@ class Buffer(nn.Module):
             keep = torch.ones_like(self.by)
             keep[idx_buffer] = 0
             keep[del_new_data] = 0
-            self.keep = keep.bool()
+            # self.keep = keep.bool()
 
             extra = keep.sum() - self.args.mem_size
             if extra > 0:
@@ -131,7 +131,7 @@ class Buffer(nn.Module):
             assert keep.sum() == self.args.mem_size, pdb.set_trace()
 
             # TODO: remove 122 for this one
-            # self.keep = keep.bool()
+            self.keep = keep.bool()
 
         if save_logits:
             self.logits[idx_buffer] = logits[idx_new_data]
