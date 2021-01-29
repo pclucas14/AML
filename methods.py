@@ -244,7 +244,7 @@ class ICARL(Method):
 
         args = self.args
 
-        loss   = F.cross_entropy(self.model(inc_x), inc_y)
+        # loss   = F.cross_entropy(self.model(inc_x), inc_y)
         logits = self.model(inc_x)
 
         # build label
@@ -273,7 +273,7 @@ class ICARL(Method):
                     exclude_labels=present if args.task_free else None
             )
 
-            loss_re = F.cross_entropy(self.model(mem_x), mem_y)
+            # loss_re = F.cross_entropy(self.model(mem_x), mem_y)
             re_logits = self.model(inc_x)
 
             # build label
