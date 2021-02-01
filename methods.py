@@ -207,6 +207,7 @@ class ICARL(Method):
 
     @torch.no_grad()
     def _calculate_centroids(self):
+        print('calculating centroids')
         buffer = self.buffer
 
         n_batches = buffer.x.size(0) // 512 + 1
@@ -236,7 +237,9 @@ class ICARL(Method):
             count  += b_count
 
         self._centroids = protos / count.view(-1, 1)
-        self._centroids = self._centroids[count > 0]
+
+        # mask out unobserved centroids
+        self._centroids[count < 1] = -1e9
 
     def observe(self, inc_x, inc_y, inc_t, inc_idx, rehearse=False):
         if inc_t != self.task:
@@ -244,7 +247,6 @@ class ICARL(Method):
 
         args = self.args
 
-        # loss   = F.cross_entropy(self.model(inc_x), inc_y)
         logits = self.model(inc_x)
 
         # build label
@@ -273,7 +275,6 @@ class ICARL(Method):
                     exclude_labels=present if args.task_free else None
             )
 
-            # loss_re = F.cross_entropy(self.model(mem_x), mem_y)
             re_logits = self.model(inc_x)
 
             # build label
@@ -314,5 +315,19 @@ class ICARL_ACE(ICARL, ER_ACE):
     def predict(self, *args, **kwargs):
         return ICARL.predict(self, *args, **kwargs)
 
+class ICARL_AML(ICARL, ER_AML):
+    def __init__(self, model, buffer, args):
+        ICARL.__init__(self, model, buffer, args)
+        ER_AML.__init__(self, model, buffer, args)
+
+    def observe(self, *args, **kwargs):
+        self._centroids = None
+
+        return ER_AML.observe(self, *args, **kwargs)
+
+    def predict(self, *args, **kwargs):
+        return ICARL.predict(self, *args, **kwargs)
+
+
 def get_method(method):
-    return {'er': ER, 'triplet': ER_AML, 'mask': ER_ACE, 'icarl': ICARL, 'icarl_mask': ICARL_ACE}[method]
+    return {'er': ER, 'triplet': ER_AML, 'mask': ER_ACE, 'icarl': ICARL, 'icarl_mask': ICARL_ACE, 'icarl_triplet': ICARL_AML}[method]

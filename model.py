@@ -123,7 +123,7 @@ class BasicBlock(nn.Module):
         return out
 
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes, nf, input_size):
+    def __init__(self, block, num_blocks, num_classes, nf, input_size, dist_linear=False):
         super(ResNet, self).__init__()
         self.in_planes = nf
         self.input_size = input_size
@@ -138,7 +138,11 @@ class ResNet(nn.Module):
 
         # hardcoded for now
         last_hid = nf * 8 * block.expansion if input_size[1] in [8,16,21,32,42] else 640
-        self.linear = distLinear(last_hid,num_classes)#nn.Linear(last_hid, num_classes)
+
+        if dist_linear:
+            self.linear = distLinear(last_hid,num_classes)
+        else:
+            self.linear = nn.Linear(last_hid, num_classes)
 
         self.activation = nn.ReLU()
 
@@ -169,8 +173,8 @@ class ResNet(nn.Module):
         out = self.linear(out)
         return out
 
-def ResNet18(nclasses, nf=20, input_size=(3, 32, 32)):
-    return ResNet(BasicBlock, [2, 2, 2, 2], nclasses, nf, input_size)
+def ResNet18(nclasses, nf=20, input_size=(3, 32, 32), *args, **kwargs):
+    return ResNet(BasicBlock, [2, 2, 2, 2], nclasses, nf, input_size, *args, **kwargs)
 
 if __name__ == '__main__':
     x = torch.randn(10, 3, 100, 100)

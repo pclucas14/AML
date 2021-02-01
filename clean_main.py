@@ -17,7 +17,7 @@ from utils import naive_cross_entropy_loss, onehot, Lookahead, AverageMeter
 
 # Arguments
 # -----------------------------------------------------------------------------------------
-METHODS = ['icarl', 'er', 'mask', 'triplet', 'iid', 'iid++', 'icarl_mask']
+METHODS = ['icarl', 'er', 'mask', 'triplet', 'iid', 'iid++', 'icarl_mask', 'icarl_triplet']
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-d', '--dataset', type=str, default = 'split_cifar10',
@@ -51,7 +51,7 @@ parser.add_argument('--buffer_neg', type=float, default=0)
 parser.add_argument('--margin', type=float, default=0.2)
 parser.add_argument('--use_augmentations', type=int, default=0)
 
-parser.add_argument('--distill_coef', type=int, default=1)
+parser.add_argument('--distill_coef', type=float, default=0.)
 parser.add_argument('--task_free', type=int, default=0)
 args = parser.parse_args()
 
@@ -232,7 +232,12 @@ for run in range(args.n_runs):
         torch.backends.cudnn.benchmark = False
 
     # CLASSIFIER
-    model = ResNet18(args.n_classes, nf=20, input_size=args.input_size)
+    model = ResNet18(
+            args.n_classes,
+            nf=20,
+            input_size=args.input_size,
+            dist_linear=args.method in ['triplet', 'mask']
+            )
 
     if args.cuda:
         model = model.to(args.device)
@@ -319,7 +324,7 @@ for run in range(args.n_runs):
             else:
                 buffer.add_reservoir(data, target, None, task, idx)
 
-        # eval_model(icarl if args.method == 'icarl' else model, val_loader, task, model='valid')
+        # eval_agent(agent, test_loader, task, mode='valid')
         eval_agent(agent, test_loader, task, mode='test')
 
 
