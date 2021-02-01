@@ -60,68 +60,6 @@ if args.method in ['iid', 'iid++']:
     args.n_tasks = 1
     args.mem_size = 1
 
-# ICarl Wrapper
-# ----------------------------------------------------------------------------------------
-class ICarl(nn.Module):
-    def __init__(self, net, gamma=0.9):
-        super().__init__()
-
-        self.net = net
-        dev = next(net.parameters()).device
-        # we will just use the last final connected layer as class prototypes
-        self.arr = torch.arange(self.net.linear.L.weight.size(1)).to(dev)
-        self.dev = dev
-
-        self.gamma = gamma
-
-    def update_proto(self, hid, y):
-        # normalize feature vectors
-        hid = F.normalize(hid, p=2, dim=-1)
-        D   = hid.size(-1)
-
-        old_proto = self.net.linear.L.weight
-        n_classes = old_proto.size(0)
-
-        correct = hid.new_zeros(size=(n_classes, D))
-        for i in range(10):
-            correct[i] += hid[y == i].sum(0)
-
-        # let's just do it in one-d
-        out_idx = self.arr.view(1, -1) + y.view(-1, 1) * D
-
-        buf = hid.new_zeros(size=(n_classes, hid.size(-1)))
-        buf = buf.flatten().scatter_add(0, out_idx.flatten(), hid.flatten()).view_as(buf)
-
-        # update the ones we saw in memory
-        update_mask = buf.new_zeros(size=(n_classes,), dtype=torch.bool, device=self.dev)
-        update_mask[y.unique()] = 1
-        update_mask = update_mask.view(-1, 1)
-
-        new_proto = old_proto * self.gamma + buf * (1 - self.gamma)
-        new_proto = update_mask * new_proto + ~update_mask * old_proto
-
-        new_proto = F.normalize(new_proto, p=2, dim=-1)
-
-        # set new points
-        self.net.linear.L.weight.data.copy_(new_proto.data)
-
-
-    def get_logits(self, hid):
-        # n_c x d
-        proto = self.net.linear.L.weight
-
-        #b_s x d for hid
-
-        # b_s x n_c
-        dist = (proto.unsqueeze(0) - hid.unsqueeze(1)).pow(2).sum(-1)
-
-        return -dist
-
-    def forward(self, x):
-        hid = self.net.return_hidden(x)
-        return self.get_logits(hid)
-
-
 # Obligatory overhead
 # -----------------------------------------------------------------------------------------
 if args.method == 'triplet':
@@ -307,16 +245,6 @@ for run in range(args.n_runs):
 
                     x2, y2 = x2.to(args.device), y2.to(args.device)
                     F.cross_entropy(model(x2), y2).backward()
-                '''
-
-                '''
-                if args.method == 'icarl':
-                    hids, ys = hidden, target
-                    if rehearse:
-                        hids = torch.cat((hids, hidden_buff))
-                        ys   = torch.cat((ys, mem_y))
-
-                    icarl.update_proto(hids, ys)
                 '''
 
             if args.method == 'triplet':
