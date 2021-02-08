@@ -1,7 +1,9 @@
-import argparse
-import torch.nn.functional as F
-import numpy as np
+import time
 import random
+import argparse
+import numpy as np
+import torch.nn as nn
+import torch.nn.functional as F
 
 from copy import deepcopy
 from data   import *
@@ -10,354 +12,214 @@ from buffer import Buffer
 from copy   import deepcopy
 from pydoc  import locate
 from model  import ResNet18, normalize
-from utils import naive_cross_entropy_loss, onehot, Lookahead, AverageMeter
-import copy
+from methods import get_method
 
 # Arguments
 # -----------------------------------------------------------------------------------------
 
+METHODS = ['icarl', 'er', 'mask', 'triplet', 'iid', 'iid++', 'icarl_mask', 'icarl_triplet']
+DATASETS = ['split_cifar10', 'split_cifar100', 'miniimagenet']
+
 parser = argparse.ArgumentParser()
-parser.add_argument('-u', '--unit_test', action='store_true',
-    help='unit testing mode for fast debugging')
-parser.add_argument('-d', '--dataset', type=str, default = 'split_cifar10',
-    choices=['split_mnist', 'permuted_mnist', 'split_cifar10', 'split_cifar100', 'miniimagenet'])
-parser.add_argument('--n_tasks', type=int, default=-1,
-    help='total number of tasks. -1 does default amount for the dataset')
-parser.add_argument('-r','--reproc', type=int, default=0,
-    help='if on, no randomness in numpy and torch')
-parser.add_argument('--disc_iters', type=int, default=1,
-    help='number of training iterations for the classifier')
+
+""" optimization (fixed across all settings) """
 parser.add_argument('--batch_size', type=int, default=10)
 parser.add_argument('--buffer_batch_size', type=int, default=10)
-parser.add_argument('--samples_per_task', type=int, default=-1,
-    help='if negative, full dataset is used')
-parser.add_argument('--mem_size', type=int, default=600, help='controls buffer size')
-parser.add_argument('--n_runs', type=int, default=1,
-    help='number of runs to average performance')
-parser.add_argument('--suffix', type=str, default='',
-    help="name for logfile")
-# logging
-parser.add_argument('-l', '--log', type=str, default='off', choices=['off', 'online'],
-    help='enable WandB logging')
-parser.add_argument('--wandb_project', type=str, default='er_imbalance',
-    help='name of the WandB project')
-parser.add_argument('--exp_name', type=str, default='tmp')
 
-#------ MIR -----#
-parser.add_argument('-m','--method', type=str, default='er', choices=['er', 'mask', 'triplet'])
+# choose your weapon
+parser.add_argument('-m','--method', type=str, default='er', choices=METHODS)
+
+""" data """
+parser.add_argument('--download', type=int, default=0)
+parser.add_argument('--n_workers', type=int, default=8)
+parser.add_argument('--data_root', type=str, default='../cl-pytorch/data')
+parser.add_argument('--dataset', type=str, default='split_cifar10', choices=DATASETS)
+
+""" setting """
+parser.add_argument('--n_iters', type=int, default=1)
+parser.add_argument('--n_tasks', type=int, default=-1)
+parser.add_argument('--task_free', type=int, default=0)
+parser.add_argument('--use_augmentations', type=int, default=0)
+parser.add_argument('--samples_per_task', type=int, default=-1)
+parser.add_argument('--mem_size', type=int, default=20, help='controls buffer size')
+
+""" logging """
+parser.add_argument('--exp_name', type=str, default='tmp')
+parser.add_argument('--wandb_project', type=str, default='er_imbalance')
+parser.add_argument('--wandb_log', type=str, default='off', choices=['off', 'online'])
+
+""" HParams """
 parser.add_argument('--lr', type=float, default=0.1)
 
-parser.add_argument('--incoming_neg', type=float, default=2.0)
-parser.add_argument('--buffer_neg', type=float, default=0)
+# ER-AML hparams
 parser.add_argument('--margin', type=float, default=0.2)
-parser.add_argument('--use_augmentations', type=int, default=0)
+parser.add_argument('--buffer_neg', type=float, default=0)
+parser.add_argument('--incoming_neg', type=float, default=2.0)
 
-parser.add_argument('--task_free', action='store_true')
+# ICARL hparams
+parser.add_argument('--distill_coef', type=float, default=1.)
 args = parser.parse_args()
 
-# ICarl Wrapper
-# ----------------------------------------------------------------------------------------
-class ICarl(nn.Module):
-    def __init__(self, net):
-        super().__init__()
-
-        self.net = net
-        # we will just use the last final connected layer as class prototypes
-
-    def update_proto(self, hid, y):
-        # normalize feature vectors
-        hid = F.normalize(hid, dim=-1)
-
-        old_proto = self.net.linear.L.weight
-        n_classes = old_proto.size(0)
-
-        buf = hid.new_zeros(size=(hid.size(-1), n_classes))
-        torch.scatter_add(buf, 1, y, hid)
-
-        # update the ones we saw in memory
-        update_mask = F.one_hot(y.present(), n_classes)
-
-        new_proto = old_proto * .95 + buf * .05
-        new_proto = update_mask * new_proto + (1 - update_mask) * old_proto
-
-        # set new points
-        self.net.linear.L.weight.data.copy_(new_proto.data)
-
-
+if args.method in ['iid', 'iid++']:
+    print('overwriting args for iid setup')
+    args.n_tasks = 1
+    args.mem_size = 1
 
 # Obligatory overhead
 # -----------------------------------------------------------------------------------------
 
-args.cuda = torch.cuda.is_available()
-args.device = 'cuda:0'
-
-# argument validation
-overlap = 0
-
-#########################################
-# TODO(Get rid of this or move to data.py)
-args.ignore_mask = False
-args.gen = False
-args.newer = 2
-#########################################
-
-args.gen_epochs=0
-args.output_loss = None
-
-if args.reproc:
-    seed=0
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-
-# fetch data
-data = locate('data.get_%s' % args.dataset)(args)
+if torch.cuda.is_available():
+    device = 'cuda:0'
+else:
+    device = 'cpu'
 
 # make dataloaders
-train_loader, val_loader, test_loader  = [CLDataLoader(elem, args, train=t) \
-        for elem, t in zip(data, [True, False, False])]
+train_loader, val_loader, test_loader  = get_data(args)
 
-if args.log != 'off':
+if args.wandb_log != 'off':
     import wandb
     wandb.init(project=args.wandb_project, name=args.exp_name, config=args)
     wandb.config.update(args)
 else:
     wandb = None
 
-# create logging containers
-LOG = get_logger(['cls_loss', 'acc'],
-        n_runs=args.n_runs, n_tasks=args.n_tasks)
+args.mem_size = args.mem_size * args.n_classes
 
-args.mem_size = args.mem_size*args.n_classes #convert from per class to total memory
+LOG = get_logger(['cls_loss', 'acc'], n_tasks=args.n_tasks)
 
 # Eval model
 # -----------------------------------------------------------------------------------------
-from sklearn.metrics import confusion_matrix
-def eval_model(model, loader, task, mode='valid'):
-    model = model.eval()
-    y_pred =[]
-    y_truth=[]
-    for task_t, te_loader in enumerate(loader):
-        if task_t > task: break
+@torch.no_grad()
+def eval_agent(agent, loader, task, mode='valid'):
+    agent.eval()
+
+    for task_t in range(task + 1):
         LOG_temp = get_temp_logger(None, ['cls_loss', 'acc'])
 
+        loader.sampler.set_task(task_t)
+
         # iterate over samples from task
-        for i, (data, target, _) in enumerate(te_loader):
-            if args.unit_test and i > 10: break
+        for i, (data, target) in enumerate(loader):
+            data, target = data.to(device), target.to(device)
 
-            if args.cuda:
-                data, target = data.to(args.device), target.to(args.device)
+            logits = agent.predict(data)
+            pred = logits.max(1)[1]
 
-            logits = model(data)
+            LOG_temp['acc'] += [pred.eq(target).float().mean().item()]
 
-            if args.multiple_heads:
-                logits = logits.masked_fill(te_loader.dataset.mask == 0, -1e9)
+        logging_per_task(wandb, LOG, mode, 'acc', task, task_t,
+            np.round(np.mean(LOG_temp['acc']),2))
 
-            loss = F.cross_entropy(logits, target)
-            pred = logits.argmax(dim=1, keepdim=True)
-            y_pred.append(pred.squeeze().cpu().numpy())
-            y_truth.append(target.squeeze().cpu().numpy())
-            LOG_temp['acc'] += [pred.eq(target.view_as(pred)).sum().item() / pred.size(0)]
-            LOG_temp['cls_loss'] += [loss.item()]
-
-        logging_per_task(wandb, LOG, run, mode, 'acc', task, task_t,
-                 np.round(np.mean(LOG_temp['acc']),2))
-        logging_per_task(wandb, LOG, run, mode, 'cls_loss', task, task_t,
-                 np.round(np.mean(LOG_temp['cls_loss']),2))
-    y_truth=np.hstack(y_truth)
-    y_pred=np.hstack(y_pred)
-    print(confusion_matrix(y_truth,y_pred))
-    print('\n{}:'.format(mode))
-    print(LOG[run][mode]['acc'])
+    print(LOG[mode]['acc'][:task+1, :task+1])
 
     if wandb is not None:
-        wandb.log({mode + '_anytime_acc_avg_' + str(run): LOG[run][mode]['acc'][0:task + 1, task].mean()})
-        wandb.log({mode + '_anytime_last_acc_' + str(run): LOG[run][mode]['acc'][task, task]})
+        wandb.log({mode + '_anytime_acc_avg': LOG[mode]['acc'][0:task + 1, task].mean()})
+        wandb.log({mode + '_anytime_last_acc': LOG[mode]['acc'][task, task]})
 
-
-hid_new_change=AverageMeter()
-hid_old_change=AverageMeter()
 
 # Train the model
 # -----------------------------------------------------------------------------------------
 
-for run in range(args.n_runs):
+# CLASSIFIER
+model = ResNet18(
+        args.n_classes,
+        nf=20,
+        input_size=args.input_size,
+        dist_linear=args.method in ['triplet', 'mask']
+        )
 
-    class_count=torch.ones(args.n_classes).cuda()
-    # REPRODUCTIBILITY
-    if args.reproc:
-        np.random.seed(run)
-        torch.manual_seed(run)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+model = model.to(device)
+model.train()
 
-    # CLASSIFIER
-    model = ResNet18(args.n_classes, nf=20, input_size=args.input_size)
-    if args.cuda:
-        model = model.to(args.device)
-    model.train()
+opt = torch.optim.SGD(model.parameters(), lr=args.lr)
 
-    opt = torch.optim.SGD(model.parameters(), lr=args.lr)
+buffer = Buffer(args).to(device)
 
-    buffer = Buffer(args).to(args.device)
-    if run == 0:
-        print("number of classifier parameters:",
-                sum([np.prod(p.size()) for p in model.parameters()]))
-        print("buffer parameters: ", np.prod(buffer.bx.size()))
+print("number of classifier parameters:",
+        sum([np.prod(p.size()) for p in model.parameters()]))
+print("buffer parameters: ", np.prod(buffer.bx.size()))
 
-    mask_so_far = None
-    #----------
-    # Task Loop
-    for task, tr_loader in enumerate(train_loader):
-        sample_amt = 0
-        model = model.train()
+# Build Method wrapper
+agent = get_method(args.method)(model, buffer, args)
 
-        #---------------
-        # Minibatch Loop
-        for i, (data, target, idx) in enumerate(tr_loader):
-            if args.unit_test and i > 10: break
-            if sample_amt > args.samples_per_task > 0: break
-            sample_amt += data.size(0)
+#----------
+# Task Loop
+for task in range(args.n_tasks):
 
-            if args.cuda:
-                idx = idx.to(args.device)
-                data = data.to(args.device)
-                target = target.to(args.device)
+    # set task
+    train_loader.sampler.set_task(task)
 
+    n_seen = 0
+    agent.train()
+
+    #---------------
+    # Minibatch Loop
+
+    for i, (data, target) in enumerate(train_loader):
+
+        if n_seen > args.samples_per_task > 0: break
+
+        data = data.to(device)
+        target = target.to(device)
+
+        # label each sample with a specific id
+        idx = torch.arange(n_seen, n_seen + data.size(0)).to(device)
+        if args.method == 'triplet':
             buffer.add_reservoir(data, target, None, task, idx, overwrite=False)
 
-            #------ Train Classifier-------#
-            if i==0:
-                print('\n--------------------------------------')
-                print('Run #{} Task #{} --> Train Classifier'.format(
-                    run, task))
-                print('--------------------------------------\n')
+        if i==0:
+            print('\nTask #{} --> Train Classifier\n'.format(task))
 
-            #---------------
-            # Iteration Loop
-            target_orig= copy.deepcopy(target)
-            for it in range(args.disc_iters):
-                rehearse = (task + i) > 0 if args.task_free else task > 0
+        #---------------
+        # Iteration Loop
 
-                target = copy.deepcopy(target_orig)
-                hidden = model.return_hidden(data)
+        for it in range(args.n_iters):
+            rehearse = task > 0 #(task + i) > 0 if args.task_free else task > 0
+            rehearse = rehearse and ~(args.method in ['iid', 'iid++'])
 
-                # mask logits not present in batch
-                present = target.unique()
-                if mask_so_far is not None:
-                    mask_so_far = torch.cat([mask_so_far, present]).unique()
-                else:
-                    mask_so_far = present
+            loss, loss_re = agent.observe(data, target, task, idx, rehearse=rehearse)
+            opt.zero_grad()
+            (loss + loss_re).backward()
+            opt.step()
 
-                mask = torch.zeros(len(target), args.n_classes)
-
-                update = True
-                if args.method == 'mask':
-                    mask[:, present] = 1
-
-                    if mask_so_far.max() < args.n_classes-1:
-                        mask[:,mask_so_far.max():] = 1
-
-                    mask = mask.cuda()
-                    logits = model.linear(hidden)
-                    logits = logits.masked_fill(mask == 0, -1e9)
-                    loss = F.cross_entropy(logits, target)
-
-                elif task == 0 or args.method == 'er':
-                    logits = model.linear(hidden)
-                    loss = F.cross_entropy(logits, target)
-
-                elif args.method == 'triplet':
-                    # fetch the constrasting points
-                    pos_x, neg_x_same_t, neg_x_diff_t, invalid_idx = \
-                            buffer.fetch_pos_neg_samples(target, task, idx, data=data)
-
-                    all_xs  = torch.cat((pos_x, neg_x_same_t, neg_x_diff_t))
-                    all_hid = normalize(model.return_hidden(all_xs)).reshape(3, pos_x.size(0), -1)
-                    pos_hid, neg_hid_same_t, neg_hid_diff_t = all_hid[:, ~invalid_idx]
-                    hidden_norm = normalize(hidden[~invalid_idx])
-
-                    if (~invalid_idx).any():
-                        loss  = args.incoming_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_same_t, args.margin)
-                        loss += args.buffer_neg * F.triplet_margin_loss(hidden_norm, pos_hid, neg_hid_diff_t, args.margin)
-                    else:
-                        update = False
-
-                opt.zero_grad()
-
-                if update:
-                    loss.backward(retain_graph=True)
-
-                if rehearse:
-                    mem_x, mem_y, bt, inds = buffer.sample(args.buffer_batch_size, aug=args.use_augmentations, ret_ind=True)#, exclude_task=task)
-                    hidden_buff = model.return_hidden(mem_x)
-
-                    logits_buffer = model.linear(hidden_buff)
-
-                    loss_a = F.cross_entropy(logits_buffer, mem_y, reduction='none')
-                    loss = (loss_a).sum() / loss_a.size(0)
-                    loss.backward()
-
-                opt.step()
-
-            # make sure we don't exceed the memory requirements
+        if args.method == 'triplet':
             buffer.balance_memory()
+        else:
+            buffer.add_reservoir(data, target, None, task, idx)
 
-        print(f'buf {buffer.bx.size(0)}')
-        eval_model(model, val_loader, task)
+        n_seen += data.size(0)
 
-
-    # final run results
-    print('--------------------------------------')
-    print('Run #{} Final Results'.format(run))
-    print('--------------------------------------')
-    for mode in ['valid','test']:
-        final_accs = LOG[run][mode]['acc'][:,task]
-        logging_per_task(wandb, LOG, run, mode, 'final_acc', task,
-            value=np.round(np.mean(final_accs),2))
-        best_acc = np.max(LOG[run][mode]['acc'], 1)
-        final_forgets = best_acc - LOG[run][mode]['acc'][:,task]
-        logging_per_task(wandb, LOG, run, mode, 'final_forget', task,
-            value=np.round(np.mean(final_forgets[:-1]),2))
-
-        LOG[run][mode]['last_task_acc'] = np.diag(
-            LOG[run][mode]['acc']).mean()  # (LOG[run][mode]['acc'][:task+1,task][-1])
-        LOG[run][mode]['allbutfirst_tasks_acc'] = np.mean(LOG[run][mode]['acc'][:task + 1, task][:-1])
-
-        print('\n{}:'.format(mode))
-        print('final accuracy: {}'.format(final_accs))
-        print('average: {}'.format(LOG[run][mode]['final_acc']))
-        print('final forgetting: {}'.format(final_forgets))
-        print('average: {}\n'.format(LOG[run][mode]['final_forget']))
+    # eval_agent(agent, val_loader, task, mode='valid')
+    eval_agent(agent, test_loader, task, mode='test')
 
 
-# final results
-print('--------------------------------------')
-print('--------------------------------------')
-print('FINAL Results')
-print('--------------------------------------')
-print('--------------------------------------')
-for mode in ['valid']:
-    final_accs = [LOG[x][mode]['final_acc'] for x in range(args.n_runs)]
-    final_acc_avg = np.mean(final_accs)
-    final_acc_se = 2*np.std(final_accs) / np.sqrt(args.n_runs)
-    final_forgets = [LOG[x][mode]['final_forget'] for x in range(args.n_runs)]
-    final_forget_avg = np.mean(final_forgets)
-    final_forget_se = 2*np.std(final_forgets) / np.sqrt(args.n_runs)
-    final_last_task_acc= np.mean( [LOG[x][mode]['last_task_acc'] for x in range(args.n_runs)])
-    final_allbutfirst_tasks_acc = np.mean([LOG[x][mode]['allbutfirst_tasks_acc'] for x in range(args.n_runs)])
-    print('\nFinal {} Accuracy: {:.3f} +/- {:.3f}'.format(mode, final_acc_avg, final_acc_se))
-    print('\nFinal {} Forget: {:.3f} +/- {:.3f}'.format(mode, final_forget_avg, final_forget_se))
-    print('\nFinal {} final_last_task_acc: {:.3f}'.format(mode, final_last_task_acc))
-    print('\nFinal {} final_allbutfirst_tasks_acc: {:.3f}'.format(mode, final_allbutfirst_tasks_acc))
+# final run results
+print('\nFinal Results\n')
+
+for mode in ['valid','test']:
+    final_accs = LOG[mode]['acc'][:,task]
+    logging_per_task(wandb, LOG, mode, 'final_acc', task,
+        value=np.round(np.mean(final_accs),2))
+    best_acc = np.max(LOG[mode]['acc'], 1)
+    final_forgets = best_acc - LOG[mode]['acc'][:,task]
+    logging_per_task(wandb, LOG, mode, 'final_forget', task,
+        value=np.round(np.mean(final_forgets[:-1]),2))
+
+    LOG[mode]['last_task_acc'] = np.diag(LOG[mode]['acc']).mean()
+    LOG[mode]['allbutfirst_tasks_acc'] = np.mean(LOG[mode]['acc'][:task + 1, task][:-1])
+
+    print('\n{}:'.format(mode))
+    print('final accuracy: {}'.format(final_accs))
+    print('average: {}'.format(LOG[mode]['final_acc']))
+    print('final forgetting: {}'.format(final_forgets))
+    print('average: {}\n'.format(LOG[mode]['final_forget']))
 
     if wandb is not None:
-        for task in range(0,args.n_tasks):
-            wandb.log({mode + '_anytime_acc_avg_all': np.mean([LOG[run][mode]['acc'][0:task + 1, task].mean() for run in range(0,args.n_runs)])})
-            wandb.log({mode + '_last_acc_avg_all': np.mean([LOG[run][mode]['acc'][task,task] for run in range(0,args.n_runs)])})
-
-        wandb.log({mode+'final_acc_avg':final_acc_avg,
-                   mode+'final_acc_se':final_acc_se,
-                   mode+'final_forget_avg':final_forget_avg,
-                   mode+'final_forget_se':final_forget_se,
-                   mode+'final_last_task_acc':final_last_task_acc,
-                   mode+'final_allbutfirst_tasks_acc':final_allbutfirst_tasks_acc})
+        for task in range(args.n_tasks):
+            wandb.log(
+		{f'{mode}_anytime_acc_avg_all': [LOG[mode]['acc'][:task+1, task].mean(),
+            	 f'_last_acc_avg_all': ([LOG[run][mode]['acc'][task,task]).mean()})
+		 f'{mode}final_acc_avg':final_acc_avg,
+                 f'{mode}final_forget_avg':final_forget_avg,
+                 f'{mode}final_last_task_acc':final_last_task_acc,
+                 f'{mode}final_allbutfirst_tasks_acc':final_allbutfirst_tasks_acc})
