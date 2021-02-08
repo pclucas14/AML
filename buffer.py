@@ -195,9 +195,7 @@ class Buffer(nn.Module):
         pos_idx = torch.multinomial(valid_pos.float().T, 1).squeeze(1)
         neg_idx_same_t = torch.multinomial(valid_neg_same_t.float().T, 1).squeeze(1)
         neg_idx_diff_t = torch.multinomial(valid_neg_diff_t.float().T, 1).squeeze(1)
-        xx = 1
 
-        #import ipdb; ipdb.set_trace()
         return self.bx[pos_idx], \
                self.bx[neg_idx_same_t], \
                self.bx[neg_idx_diff_t], \
@@ -241,9 +239,7 @@ class Buffer(nn.Module):
             indices = indices.to(self.bx.device)
 
             if aug:
-                # this is sort of wrong cause its already normalized
-                # needs to be fixed somehow (unnormalized and renormanlized in th e end?>)
-
+                # A la G-Dumb oui
                 transform = nn.Sequential(
                         kornia.augmentation.RandomCrop(size=self.input_size[1:],padding=4),
                     kornia.augmentation.RandomHorizontalFlip()
@@ -260,9 +256,3 @@ class Buffer(nn.Module):
         indices = torch.randperm(self.current_index).to(self.args.device)
         return indices[:amt], indices[amt:]
 
-
-def get_cifar_buffer(args, hH=8, gen=None):
-    args.input_size = (hH, hH)
-    args.gen = True
-
-    return Buffer(args, gen=gen)

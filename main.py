@@ -217,8 +217,8 @@ for mode in ['valid','test']:
     if wandb is not None:
         for task in range(args.n_tasks):
             wandb.log(
-		{f'{mode}_anytime_acc_avg_all': [LOG[mode]['acc'][:task+1, task].mean(),
-            	 f'_last_acc_avg_all': ([LOG[run][mode]['acc'][task,task]).mean()})
+		{f'{mode}_anytime_acc_avg_all': LOG[mode]['acc'][:task+1, task].mean(),
+            	 f'{mode}_last_acc_avg_all': LOG[run][mode]['acc'][task,task].mean(),
 		 f'{mode}final_acc_avg':final_acc_avg,
                  f'{mode}final_forget_avg':final_forget_avg,
                  f'{mode}final_last_task_acc':final_last_task_acc,
