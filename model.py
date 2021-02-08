@@ -7,82 +7,32 @@ from torch import nn
 import torch.utils.data
 from torch.nn import functional as F
 from torch.autograd import Variable
-#from VAE.layers import GatedDense
-from utils import Reshape
 
-
-# Custom Batch Norm layer
-# goal : control impact of each sample on the batch norm statistics
 
 def normalize(x):
     x_norm = torch.norm(x, p=2, dim=1).unsqueeze(1).expand_as(x)
     x_normalized = x.div(x_norm + 0.00001)
     return x_normalized
 
-
-# TODO: @Eugene please clean this up
-
-from torch.nn.utils.weight_norm import WeightNorm
 class distLinear(nn.Module):
     def __init__(self, indim, outdim, weight=None):
         super(distLinear, self).__init__()
         self.L = nn.Linear( indim, outdim, bias = False)
         if weight is not None:
             self.L.weight.data = Variable(weight)
-        self.class_wise_learnable_norm = False #See the issue#4&8 in the github
-        if self.class_wise_learnable_norm:
-            WeightNorm.apply(self.L, 'weight', dim=0) #split the weight update component to direction and norm
 
-
-        self.scale_factor = 10; #in omniglot, a larger scale factor is required to handle >1000 output classes.
-       # self.scale_factor = nn.Parameter(torch.tensor(0.5))
+        self.scale_factor = 10
 
     def forward(self, x):
         x_norm = torch.norm(x, p=2, dim =1).unsqueeze(1).expand_as(x)
         x_normalized = x.div(x_norm+ 0.00001)
-        if not self.class_wise_learnable_norm:
-            L_norm = torch.norm(self.L.weight, p=2, dim =1).unsqueeze(1).expand_as(self.L.weight.data)
-            #self.L.weight = self.L.weight.div(L_norm + 0.00001)#.data = self.L.weight.data.div(L_norm + 0.00001)
-            cos_dist = torch.mm(x_normalized,self.L.weight.div(L_norm + 0.00001).transpose(0,1))
-        else:
-            cos_dist = self.L(x_normalized) #matrix product by forward function, but when using WeightNorm, this also multiply the cosine distance by a class-wise learnable norm, see the issue#4&8 in the github
+
+        L_norm = torch.norm(self.L.weight, p=2, dim =1).unsqueeze(1).expand_as(self.L.weight.data)
+        cos_dist = torch.mm(x_normalized,self.L.weight.div(L_norm + 0.00001).transpose(0,1))
+
         scores = self.scale_factor * (cos_dist)
 
-        if torch.abs(cos_dist.max())>2.0:
-            print('cos dist too big')
-            import ipdb; ipdb.set_trace()
-
         return scores
-
-class TopKReLU(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input):
-
-        assert input.ndim == 4 # B, C, H, W
-
-        B, C, H, W = input.size()
-
-        n_active = C // 3
-
-        top_k_val, top_k_idx = input.topk(n_active, dim=1)
-        active = torch.zeros_like(input)
-        active.scatter_(dim=1, index=top_k_idx, value=1)
-
-        ctx.save_for_backward(active)
-
-        out = input * active
-
-        return out
-
-    @staticmethod
-    def backward(ctx, g):
-
-        active, = ctx.saved_tensors
-
-        return g * active
-
-topkrelu = lambda : TopKReLU.apply
-
 
 # Classifiers
 # -----------------------------------------------------------------------------------

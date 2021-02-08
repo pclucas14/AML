@@ -11,7 +11,6 @@ from buffer import Buffer
 from copy   import deepcopy
 from pydoc  import locate
 from model  import ResNet18, normalize
-from utils import naive_cross_entropy_loss, onehot, Lookahead, AverageMeter
 import copy
 
 
