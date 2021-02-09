@@ -10,7 +10,6 @@ from utils import download_file_from_google_drive
 
 """ Datasets """
 class MiniImagenet(datasets.ImageFolder):
-    url = 'https://drive.google.com/file/d/1f-AR7gWPOvo5Noxi25hDE8LD878oa5vc/view?usp=sharing'
 
     def __init__(self, root, train=True, transform=None, download=False):
 
