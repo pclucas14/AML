@@ -301,32 +301,6 @@ class ICARL(Method):
 
         return -dist
 
-class ICARL_ACE(ICARL, ER_ACE):
-    def __init__(self, model, buffer, args):
-        ICARL.__init__(self, model, buffer, args)
-        ER_ACE.__init__(self, model, buffer, args)
-
-    def observe(self, *args, **kwargs):
-        self._centroids = None
-
-        return ER_ACE.observe(self, *args, **kwargs)
-
-    def predict(self, *args, **kwargs):
-        return ICARL.predict(self, *args, **kwargs)
-
-class ICARL_AML(ICARL, ER_AML):
-    def __init__(self, model, buffer, args):
-        ICARL.__init__(self, model, buffer, args)
-        ER_AML.__init__(self, model, buffer, args)
-
-    def observe(self, *args, **kwargs):
-        self._centroids = None
-
-        return ER_AML.observe(self, *args, **kwargs)
-
-    def predict(self, *args, **kwargs):
-        return ICARL.predict(self, *args, **kwargs)
-
 
 def get_method(method):
-    return {'er': ER, 'triplet': ER_AML, 'mask': ER_ACE, 'icarl': ICARL, 'icarl_mask': ICARL_ACE, 'icarl_triplet': ICARL_AML}[method]
+    return {'er': ER, 'triplet': ER_AML, 'mask': ER_ACE, 'icarl': ICARL}[method]
