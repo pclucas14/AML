@@ -20,6 +20,8 @@ class MiniImagenet(datasets.ImageFolder):
             transform=transform
         )
 
+        self.data = np.array([x[0] for x in self.samples])
+
 
 """ Samplers """
 class ContinualSampler(torch.utils.data.Sampler):
