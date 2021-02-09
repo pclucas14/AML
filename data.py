@@ -6,12 +6,25 @@ import numpy as np
 
 from copy import deepcopy
 from torchvision import datasets, transforms
+from utils import download_file_from_google_drive
 
 """ Datasets """
 class MiniImagenet(datasets.ImageFolder):
+    url = 'https://drive.google.com/file/d/1f-AR7gWPOvo5Noxi25hDE8LD878oa5vc/view?usp=sharing'
+
     def __init__(self, root, train=True, transform=None, download=False):
 
-        assert not download
+        if download:
+            dump_path = os.path.join(root, 'miniimagenet')
+            if os.path.exists(dump_path):
+                print('MiniIm directory exists, skipping download')
+            else:
+                download_file_from_google_drive(
+                    '1f-AR7gWPOvo5Noxi25hDE8LD878oa5vc',
+                    root,
+                    'miniim.tar.gz'
+                )
+                os.system('cd miniimagenet & tar -xvf miniim.tar.gz')
 
         path = os.path.join(root, 'miniimagenet', 'train' if train else 'test')
         print(path)
