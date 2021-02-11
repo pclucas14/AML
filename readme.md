@@ -12,6 +12,7 @@ Avoiding disrupting learned representations when new classes are introduced </br
     ├── buffer.py           # Basic buffer implementation 
     ├── data.py             # DataLoaders and Datasets
     ├── main.py             # main file for ER
+    ├── model.py            # model defitinition and cosine cross-entropy head
     ├── utils.py            # utilities, from logging to data download
 
 ## Running Experiments
