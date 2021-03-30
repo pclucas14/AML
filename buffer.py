@@ -59,7 +59,6 @@ class Buffer(nn.Module):
 
     def add_reservoir(self, x, y, logits, t, idx, overwrite=True):
         n_elem = x.size(0)
-        save_logits = logits is not None
 
         self.keep = None
         # add whatever still fits in the buffer
@@ -70,7 +69,7 @@ class Buffer(nn.Module):
             self.by[self.current_index: self.current_index + offset].data.copy_(y[:offset])
             self.bt[self.current_index: self.current_index + offset].fill_(t)
 
-            if save_logits:
+            if logits is not None:
                 self.logits[self.current_index: self.current_index + offset].data.copy_(logits[:offset])
 
             if idx is not None:
@@ -105,7 +104,13 @@ class Buffer(nn.Module):
             self.by[idx_buffer] = y[idx_new_data]
             self.bt[idx_buffer] = t
             self.bidx[idx_buffer] = idx[idx_new_data]
+
+            if logits is not None:
+                self.logits[idx_buffer] = logits[idx_new_data]
+
         else:
+            assert logits is None
+
             del_new_data = (~valid_indices).nonzero().squeeze(-1) + self.bx.size(0)
 
             """ instead we concatenate, and we will remove later! """
@@ -132,9 +137,6 @@ class Buffer(nn.Module):
 
             # TODO: remove 122 for this one
             self.keep = keep.bool()
-
-        if save_logits:
-            self.logits[idx_buffer] = logits[idx_new_data]
 
 
     def balance_memory(self):
@@ -202,7 +204,7 @@ class Buffer(nn.Module):
                is_invalid
 
 
-    def sample(self, amt, exclude_task=None, exclude_labels=None, ret_ind=False, aug=False):
+    def sample(self, amt, exclude_task=None, exclude_labels=None, return_logits=False, aug=False):
         assert not (exclude_task is not None and exclude_labels is not None)
 
         if exclude_task is not None:
@@ -211,7 +213,7 @@ class Buffer(nn.Module):
             bx = self.bx[valid_indices]
             by = self.by[valid_indices]
             bt = self.bt[valid_indices]
-            bidx = self.bidx[valid_indices]
+            logits = self.logits[valid_indices]
         elif exclude_labels is not None:
             # all true tensor
             valid_indices = self.bt > -1
@@ -222,16 +224,17 @@ class Buffer(nn.Module):
             bx = self.bx[valid_indices]
             by = self.by[valid_indices]
             bt = self.bt[valid_indices]
-            bidx = self.bidx[valid_indices]
+            logits = self.logits[valid_indices]
         else:
             bx = self.bx[:self.current_index]
             by = self.by[:self.current_index]
             bt = self.bt[:self.current_index]
             bidx = self.bidx[:self.current_index]
+            logits = self.logits[:self.current_index]
 
         if bx.size(0) < amt:
-            if ret_ind:
-                return bx, by, bt, bidx
+            if return_logits:
+                return bx, by, bt, logits
             else:
                 return bx, by, bt
         else:
@@ -247,8 +250,8 @@ class Buffer(nn.Module):
                 ret = transform(bx[indices])
             else:
                 ret = bx[indices]
-            if ret_ind:
-                return ret, by[indices], bt[indices], bidx[indices]
+            if return_logits:
+                return ret, by[indices], bt[indices], logits[indices]
             else:
                 return ret, by[indices], bt[indices]
 
