@@ -59,11 +59,96 @@ class ER(Method):
         return loss, loss_re
 
 
+class ER_Multihead(Method):
+    def __init__(self, model, buffer, args):
+        super(ER_Multihead, self).__init__(model, buffer, args)
+
+        classes_per_task = cpt = args.n_classes // args.n_tasks
+
+        task_labels = torch.arange(classes_per_task).view(1, -1)
+        task_labels = task_labels + torch.arange(args.n_tasks).view(-1, 1) * cpt
+        task_labels = task_labels.to(next(model.parameters()).device)
+
+        self.cpt = cpt
+        self.task_labels = task_labels
+        self.n_classes = args.n_classes
+
+    def get_mask(self, target):
+        # input : (bs,) target vector
+        # output : (bs, n_classes) mask
+
+        # the mask is built by only revealing classes in the same
+        # task as the input.
+        # for split miniIm, if y = 7 then only logits 5,6,7,8,9 would be trained
+        BS = target.size(0)
+
+        mask = torch.zeros(size=(BS, self.args.n_classes), \
+                device=target.device, dtype=torch.bool)
+
+        per_sample_task_id = target // self.cpt
+        per_sample_task_labels = self.task_labels[per_sample_task_id]
+
+        mask.scatter_(1, per_sample_task_labels, 1)
+
+        return mask
+
+    def observe(self, inc_x, inc_y, inc_t, inc_idx, rehearse=False):
+        args = self.args
+
+        if rehearse:
+            mem_x, mem_y, bt = self.buffer.sample(
+                    args.buffer_batch_size,
+                    aug=args.use_augmentations,
+                    exclude_task=None,
+                    exclude_labels=None,
+            )
+            inc_x = torch.cat((inc_x, mem_x))
+            inc_y = torch.cat((inc_y, mem_y))
+
+        logits = self.model(inc_x)
+
+        if True:#inc_t > 0:
+            mask = self.get_mask(inc_y)
+            logits = logits.masked_fill(mask == 0, -1e9)
+
+        loss = F.cross_entropy(logits, inc_y)
+        return loss, 0.
+
+        '''
+        # mask out logits from other classes
+        mask = self.get_mask(inc_y)
+        logits = self.model(inc_x)
+
+        if inc_t > 0:
+            logits = logits.masked_fill(mask == 0, -1e9)
+
+        loss    = F.cross_entropy(logits, inc_y)
+        loss_re = 0.
+
+        if rehearse:
+            # sample from buffer
+            mem_x, mem_y, bt = self.buffer.sample(
+                    args.buffer_batch_size,
+                    aug=args.use_augmentations,
+                    exclude_task=None,
+                    exclude_labels=None,
+            )
+            mask_re   = self.get_mask(mem_y)
+            logits_re = self.model(mem_x)
+
+            # mask re logits
+            logits_re = logits_re.masked_fill(mask_re == 0, -1e9)
+            loss_re   = F.cross_entropy(logits_re, mem_y)
+
+        return loss, loss_re
+        '''
+
 class ER_ACE(ER):
     def __init__(self, model, buffer, args):
         super(ER_ACE, self).__init__(model, buffer, args)
 
         self.seen_so_far = torch.LongTensor(size=(0,)).to(buffer.bx.device)
+        self.task = -1
 
     def observe(self, inc_x, inc_y, inc_t, inc_idx, rehearse=False):
 
@@ -302,5 +387,54 @@ class ICARL(Method):
         return -dist
 
 
+class DER(Method):
+    def __init__(self, model, buffer, args):
+        super(DER, self).__init__(model, buffer, args)
+
+        #assert (args.alpha + args.beta) > 0
+
+    def observe(self, inc_x, inc_y, inc_t, inc_idx, rehearse=False):
+        args = self.args
+
+        logits  = self.model(inc_x)
+        loss    = F.cross_entropy(logits, inc_y)
+        loss_re = 0.
+
+        # hack to save the logits
+        self.inc_logits = logits.detach()
+
+        if rehearse:
+            if self.args.alpha > 0:
+                # sample from buffer
+                mem_x, mem_y, bt, mem_logits = self.buffer.sample(
+                        args.buffer_batch_size,
+                        aug=args.use_augmentations,
+                        exclude_task=None if args.task_free else inc_t,
+                        exclude_labels=present if args.task_free else None,
+                        return_logits=True
+                )
+
+                # distillation loss
+                re_logits = self.model(mem_x)
+                alpha_loss = F.mse_loss(re_logits, mem_logits)
+                loss_re += self.args.alpha * alpha_loss
+
+            if self.args.beta > 0:
+                # sample from buffer
+                mem_x, mem_y, _ = self.buffer.sample(
+                        args.buffer_batch_size,
+                        aug=args.use_augmentations,
+                        exclude_task=None if args.task_free else inc_t,
+                        exclude_labels=present if args.task_free else None,
+                )
+
+                beta_loss = F.cross_entropy(self.model(mem_x), mem_y)
+                loss_re += self.args.beta * beta_loss
+
+
+        return loss, loss_re
+
+
+
 def get_method(method):
-    return {'er': ER, 'triplet': ER_AML, 'mask': ER_ACE, 'icarl': ICARL}[method]
+    return {'er': ER, 'triplet': ER_AML, 'mask': ER_ACE, 'icarl': ICARL, 'er_multihead': ER_Multihead, 'der': DER}[method]
