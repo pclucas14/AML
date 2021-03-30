@@ -78,6 +78,10 @@ class ContinualSampler(torch.utils.data.Sampler):
             yield item
 
 
+    def __len__(self):
+        return len(self.task_samples)
+
+
     def set_task(self, task):
         self.task = task
 

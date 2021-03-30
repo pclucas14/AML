@@ -17,7 +17,7 @@ from methods import get_method
 # Arguments
 # -----------------------------------------------------------------------------------------
 
-METHODS = ['icarl', 'er', 'mask', 'triplet', 'iid', 'iid++', 'icarl_mask', 'icarl_triplet']
+METHODS = ['icarl', 'er', 'mask', 'triplet', 'iid', 'iid++', 'icarl_mask', 'icarl_triplet', 'er_multihead', 'der']
 DATASETS = ['split_cifar10', 'split_cifar100', 'miniimagenet']
 
 parser = argparse.ArgumentParser()
@@ -58,6 +58,11 @@ parser.add_argument('--incoming_neg', type=float, default=2.0)
 
 # ICARL hparams
 parser.add_argument('--distill_coef', type=float, default=1.)
+
+# DER params
+parser.add_argument('--alpha', type=float, default=.1)
+parser.add_argument('--beta', type=float, default=.5)
+
 args = parser.parse_args()
 
 if args.method in ['iid', 'iid++']:
@@ -185,7 +190,10 @@ for task in range(args.n_tasks):
         if args.method == 'triplet':
             buffer.balance_memory()
         else:
-            buffer.add_reservoir(data, target, None, task, idx)
+            logits = None
+            if hasattr(agent, 'inc_logits'):
+                logits = agent.inc_logits
+            buffer.add_reservoir(data, target, logits, task, idx)
 
         n_seen += data.size(0)
 
@@ -218,8 +226,9 @@ for mode in ['valid','test']:
         for task in range(args.n_tasks):
             wandb.log(
 		{f'{mode}_anytime_acc_avg_all': LOG[mode]['acc'][:task+1, task].mean(),
-            	 f'{mode}_last_acc_avg_all': LOG[run][mode]['acc'][task,task].mean(),
-		 f'{mode}final_acc_avg':final_acc_avg,
-                 f'{mode}final_forget_avg':final_forget_avg,
-                 f'{mode}final_last_task_acc':final_last_task_acc,
-                 f'{mode}final_allbutfirst_tasks_acc':final_allbutfirst_tasks_acc})
+            	 f'{mode}_last_acc_avg_all': LOG[mode]['acc'][task,task].mean(),
+		 f'{mode}final_acc_avg':final_accs.mean(),
+                 f'{mode}final_forget_avg':final_forgets.mean(),
+                 # f'{mode}final_last_task_acc':final_last_task_acc,
+                 # f'{mode}final_allbutfirst_tasks_acc':final_allbutfirst_tasks_acc
+                 })
