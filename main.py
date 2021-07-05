@@ -12,7 +12,7 @@ from buffer import Buffer
 from copy   import deepcopy
 from pydoc  import locate
 from model  import ResNet18, normalize
-from methods import get_method
+from old_methods import get_method
 
 # Arguments
 # -----------------------------------------------------------------------------------------
@@ -62,6 +62,8 @@ parser.add_argument('--distill_coef', type=float, default=1.)
 # DER params
 parser.add_argument('--alpha', type=float, default=.1)
 parser.add_argument('--beta', type=float, default=.5)
+
+parser.add_argument('--old', action='store_true')
 
 args = parser.parse_args()
 
@@ -136,16 +138,28 @@ model = ResNet18(
 model = model.to(device)
 model.train()
 
-opt = torch.optim.SGD(model.parameters(), lr=args.lr)
+if args.old:
+    opt = torch.optim.SGD(model.parameters(), lr=args.lr)
 
-buffer = Buffer(args).to(device)
+buffer = Buffer(capacity=args.mem_size).to(device)
 
 print("number of classifier parameters:",
         sum([np.prod(p.size()) for p in model.parameters()]))
 print("buffer parameters: ", np.prod(buffer.bx.size()))
 
 # Build Method wrapper
-agent = get_method(args.method)(model, buffer, args)
+if args.old:
+    agent = get_method(args.method)(model, buffer, args)
+else:
+    import methods
+    if args.method == 'er':
+        from methods.er import ER
+        agent = ER
+    elif args.method == 'mask':
+        from methods.er_ace import ER_ACE
+        agent = ER_ACE
+
+    agent = agent(model, buffer, args)
 
 #----------
 # Task Loop
@@ -167,35 +181,28 @@ for task in range(args.n_tasks):
         data = data.to(device)
         target = target.to(device)
 
-        # label each sample with a specific id
-        idx = torch.arange(n_seen, n_seen + data.size(0)).to(device)
-        if args.method == 'triplet':
-            buffer.add_reservoir(data, target, None, task, idx, overwrite=False)
-
         if i==0:
             print('\nTask #{} --> Train Classifier\n'.format(task))
 
         #---------------
         # Iteration Loop
+        inc_data = {'x': data, 'y': target, 't': task}
 
         for it in range(args.n_iters):
-            rehearse = task > 0 #(task + i) > 0 if args.task_free else task > 0
-            rehearse = rehearse and ~(args.method in ['iid', 'iid++'])
 
-            loss, loss_re = agent.observe(data, target, task, idx, rehearse=rehearse)
-            opt.zero_grad()
-            (loss + loss_re).backward()
-            opt.step()
+            if args.old:
+                aa, bb = agent.observe(inc_data)
 
-        if args.method == 'triplet':
-            buffer.balance_memory()
-        else:
-            logits = None
-            if hasattr(agent, 'inc_logits'):
-                logits = agent.inc_logits
-            buffer.add_reservoir(data, target, logits, task, idx)
+                opt.zero_grad()
+                (aa + bb).backward()
+                opt.step()
+            else:
+                agent.observe(inc_data)
 
         n_seen += data.size(0)
+
+        if args.old:
+            buffer.add(inc_data)
 
     # eval_agent(agent, val_loader, task, mode='valid')
     eval_agent(agent, test_loader, task, mode='test')

@@ -4,258 +4,175 @@ import pdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-#import torchvision.transforms as transforms
 import kornia
 
+from collections import OrderedDict
+from collections import Iterable
+
 class Buffer(nn.Module):
-    def __init__(self, args, input_size=None):
+    def __init__(
+        self,
+        capacity,
+        items_to_store={'x': (torch.FloatTensor, (3, 32, 32)),
+                        'y': (torch.LongTensor,  ()),
+                        't': (torch.LongTensor,  ())}
+    ):
         super().__init__()
-        self.args = args
 
-        self.place_left = True
+        # we need at least these two attributes
+        assert all(key in items_to_store.keys() for key in ['x', 'y'])
 
-        if input_size is None:
-            input_size = args.input_size
+        # create placeholders for each item
+        self.buffers = []
 
-        buffer_size = args.mem_size
-        print('buffer has %d slots' % buffer_size)
+        for name, (dtype, size) in items_to_store.items():
+            tmp = dtype(size=(capacity,) + size).fill_(0)
+            self.register_buffer(f'b{name}', tmp)
+            self.buffers += [f'b{name}']
 
-        bx = torch.FloatTensor(buffer_size, *input_size).fill_(0)
-        by = torch.LongTensor(buffer_size).fill_(0)
-        bt = torch.LongTensor(buffer_size).fill_(0)
-        bidx = torch.LongTensor(buffer_size).fill_(0)
-        logits = torch.FloatTensor(buffer_size, args.n_classes).fill_(0)
-
+        self.cap = capacity
         self.current_index = 0
         self.n_seen_so_far = 0
-        self.input_size    = input_size
+        self.is_full       = 0
 
-        # registering as buffer allows us to save the object using `torch.save`
-        self.register_buffer('bx', bx)
-        self.register_buffer('by', by)
-        self.register_buffer('bt', bt)
-        self.register_buffer('logits', logits)
-        self.register_buffer('bidx', bidx)
-
-        self.to_one_hot  = lambda x : x.new(x.size(0), args.n_classes).fill_(0).scatter_(1, x.unsqueeze(1), 1)
-        self.arange_like = lambda x : torch.arange(x.size(0)).to(x.device)
-        self.shuffle     = lambda x : x[torch.randperm(x.size(0))]
+        # defaults
+        self.add = self.add_reservoir #balanced #reservoir
+        self.sample = self.sample_random
 
     @property
-    def x(self):
-        return self.bx[:self.current_index]
+    def device(self):
+        return getattr(self, self.buffers[0]).device
 
-    @property
-    def y(self):
-        return self.to_one_hot(self.by[:self.current_index])
 
-    @property
-    def t(self):
-        return self.bt[:self.current_index]
+    def __len__(self):
+        return self.current_index
 
-    @property
-    def valid(self):
-        return self.is_valid[:self.current_index]
 
-    def add_reservoir(self, x, y, logits, t, idx, overwrite=True):
-        n_elem = x.size(0)
+    def add_reservoir(self, batch):
+        n_elem = batch['x'].size(0)
 
-        self.keep = None
-        # add whatever still fits in the buffer
-        place_left = max(0, self.bx.size(0) - self.current_index)
-        if place_left:
-            offset = min(place_left, n_elem)
-            self.bx[self.current_index: self.current_index + offset].data.copy_(x[:offset])
-            self.by[self.current_index: self.current_index + offset].data.copy_(y[:offset])
-            self.bt[self.current_index: self.current_index + offset].fill_(t)
+        place_left = max(0, self.cap - self.current_index)
 
-            if logits is not None:
-                self.logits[self.current_index: self.current_index + offset].data.copy_(logits[:offset])
+        indices = torch.FloatTensor(n_elem).to(self.device)
+        indices = indices.uniform_(0, self.n_seen_so_far).long()
 
-            if idx is not None:
-                self.bidx[self.current_index: self.current_index + offset].data.copy_(idx[:offset])
+        if place_left > 0:
+            upper_bound = min(place_left, n_elem)
+            indices[:upper_bound] = torch.arange(upper_bound) + self.current_index
 
-            self.current_index += offset
-            self.n_seen_so_far += offset
+        valid_indices = (indices < self.cap).long()
+        idx_new_data  = valid_indices.nonzero().squeeze(-1)
+        idx_buffer    = indices[idx_new_data]
 
-            # everything was added
-            if offset == x.size(0):
-                return
+        self.n_seen_so_far += n_elem
+        self.current_index = min(self.n_seen_so_far, self.cap)
 
-        self.place_left = False
-
-        # remove what is already in the buffer
-        x, y, idx = x[place_left:], y[place_left:], idx[place_left:]
-
-        indices = torch.FloatTensor(x.size(0)).to(x.device).uniform_(0, self.n_seen_so_far).long()
-        valid_indices = (indices < self.bx.size(0))
-
-        idx_new_data = valid_indices.nonzero().squeeze(-1)
-        idx_buffer   = indices[idx_new_data]
-
-        self.n_seen_so_far += x.size(0)
-
-        if idx_buffer.numel() == 0 and overwrite:
+        if idx_buffer.numel() == 0:
             return
 
         # perform overwrite op
-        if overwrite:
-            self.bx[idx_buffer] = x[idx_new_data]
-            self.by[idx_buffer] = y[idx_new_data]
-            self.bt[idx_buffer] = t
-            self.bidx[idx_buffer] = idx[idx_new_data]
+        for name, data in batch.items():
+            buffer = getattr(self, f'b{name}')
 
-            if logits is not None:
-                self.logits[idx_buffer] = logits[idx_new_data]
-
-        else:
-            assert logits is None
-
-            del_new_data = (~valid_indices).nonzero().squeeze(-1) + self.bx.size(0)
-
-            """ instead we concatenate, and we will remove later! """
-            self.bx = torch.cat((self.bx, x))
-            self.by = torch.cat((self.by, y))
-            self.bt = torch.cat((self.bt, torch.zeros_like(y).fill_(t)))
-            self.bidx = torch.cat((self.bidx, idx))
-
-            assert self.by.size() == self.bt.size(), pdb.set_trace()
-
-            keep = torch.ones_like(self.by)
-            keep[idx_buffer] = 0
-            keep[del_new_data] = 0
-            # self.keep = keep.bool()
-
-            extra = keep.sum() - self.args.mem_size
-            if extra > 0:
-                # print(f'extra : {extra}')
-                probs = keep.float() / keep.sum()
-                also = torch.multinomial(probs, extra)
-                keep[also] = 0
-
-            assert keep.sum() == self.args.mem_size, pdb.set_trace()
-
-            # TODO: remove 122 for this one
-            self.keep = keep.bool()
+            if isinstance(data, Iterable):
+                buffer[idx_buffer] = data[idx_new_data]
+            else:
+                buffer[idx_buffer] = data
 
 
-    def balance_memory(self):
-        if self.keep is None:
+    def add_balanced(self, batch):
+        n_elem = batch['x'].size(0)
+
+        # increment first
+        self.n_seen_so_far += n_elem
+        self.current_index = min(self.n_seen_so_far, self.cap)
+
+        # first thing is we just add all the data
+        for name, data in batch.items():
+            buffer = getattr(self, f'b{name}')
+
+            if not isinstance(data, Iterable):
+                data = buffer.new(size=(n_elem, *buffer.shape[1:])).fill_(data)
+
+            buffer = torch.cat((data, buffer))[:self.n_seen_so_far]
+            setattr(self, f'b{name}', buffer)
+
+        n_samples_over = buffer.size(0) - self.cap
+
+        # no samples to remove
+        if n_samples_over <= 0:
             return
 
-        self.bx = self.bx[self.keep]
-        self.by = self.by[self.keep]
-        self.bt = self.bt[self.keep]
-        self.bidx = self.bidx[self.keep]
+        # remove samples from the most common classes
+        class_count   = self.by.bincount()
+        rem_per_class = torch.zeros_like(class_count)
 
-        self.keep = None
+        while rem_per_class.sum() < n_samples_over:
+            max_idx = class_count.argmax()
+            rem_per_class[max_idx] += 1
+            class_count[max_idx]   -= 1
 
+        # always remove the oldest samples for each class
+        classes_trimmed = rem_per_class.nonzero().flatten()
+        idx_remove = []
 
-    def fetch_pos_neg_samples(self, label, task, idx, data=None, task_free=True):
-        # a sample is uniquely identifiable using `task` and `idx`
+        for cls in classes_trimmed:
+            cls_idx = (self.by == cls).nonzero().view(-1)
+            idx_remove += [cls_idx[-rem_per_class[cls]:]]
 
-        if type(task) == int:
-            task = torch.LongTensor(label.size(0)).to(label.device).fill_(task)
+        idx_remove = torch.cat(idx_remove)
+        idx_mask   = torch.BoolTensor(buffer.size(0)).to(self.device)
+        idx_mask.fill_(0)
+        idx_mask[idx_remove] = 1
 
-        same_label = label.view(1, -1) == self.by.view(-1, 1)    # buf_size x label_size
-        same_task  = task.view(1, -1)  == self.bt.view(-1, 1)    # buf_size x label_size
-        same_idx   = idx.view(1, -1)   == self.bidx.view(-1, 1)  # buf_size x label_size
-        same_ex    = same_task & same_idx
-
-        task_labels = label.unique()
-        real_same_task = same_task
-
-        # TASK FREE METHOD : instead of using the task ID, we'll use labels in
-        # the current batch to mimic task
-        if task_free:
-            same_task = torch.zeros_like(same_task)
-
-            for label_ in task_labels:
-                label_exp = label_.view(1, -1).expand_as(same_task)
-                same_task = same_task | (label_exp == self.by.view(-1, 1))
-
-        valid_pos  = same_label & ~same_ex
-        valid_neg_same_t = ~same_label & same_task & ~same_ex
-        valid_neg_diff_t = ~same_label & ~same_task & ~same_ex
-
-        # remove points which don't have pos, neg from same and diff t
-        has_valid_pos = valid_pos.sum(0) > 0
-        has_valid_neg = (valid_neg_same_t.sum(0) > 0) & (valid_neg_diff_t.sum(0) > 0)
-
-        invalid_idx = (~has_valid_pos | ~has_valid_neg).nonzero().squeeze()
-        if invalid_idx.numel() > 0:
-            # so the fetching operation won't fail
-            valid_pos[:, invalid_idx] = 1
-            valid_neg_same_t[:, invalid_idx] = 1
-            valid_neg_diff_t[:, invalid_idx] = 1
-
-        # easier if invalid_idx is a binary tensor
-        is_invalid = torch.zeros_like(label).bool()
-        is_invalid[invalid_idx] = 1
-
-        # fetch positive samples
-        pos_idx = torch.multinomial(valid_pos.float().T, 1).squeeze(1)
-        neg_idx_same_t = torch.multinomial(valid_neg_same_t.float().T, 1).squeeze(1)
-        neg_idx_diff_t = torch.multinomial(valid_neg_diff_t.float().T, 1).squeeze(1)
-
-        return self.bx[pos_idx], \
-               self.bx[neg_idx_same_t], \
-               self.bx[neg_idx_diff_t], \
-               is_invalid
+        # perform overwrite op
+        for name, data in batch.items():
+            buffer = getattr(self, f'b{name}')
+            buffer = buffer[~idx_mask]
+            setattr(self, f'b{name}', buffer)
 
 
-    def sample(self, amt, exclude_task=None, exclude_labels=None, return_logits=False, aug=False):
-        assert not (exclude_task is not None and exclude_labels is not None)
+    def sample_random(self, amt, exclude_task=None):
+        buffers = OrderedDict()
 
         if exclude_task is not None:
-            valid_indices = (self.t != exclude_task)
-            valid_indices = valid_indices.nonzero().squeeze()
-            bx = self.bx[valid_indices]
-            by = self.by[valid_indices]
-            bt = self.bt[valid_indices]
-            logits = self.logits[valid_indices]
-        elif exclude_labels is not None:
-            # all true tensor
-            valid_indices = self.bt > -1
-            for label in exclude_labels:
-                valid_indices = valid_indices & (self.by != label)
-
-            valid_indices = valid_indices.nonzero().squeeze()
-            bx = self.bx[valid_indices]
-            by = self.by[valid_indices]
-            bt = self.bt[valid_indices]
-            logits = self.logits[valid_indices]
+            assert hasattr(self, 'bt')
+            valid_indices = (self.bt != exclude_task).nonzero().squeeze()
+            for buffer_name in self.buffers:
+                buffers[buffer_name[1:]] = getattr(self, buffer_name)[valid_indices]
         else:
-            bx = self.bx[:self.current_index]
-            by = self.by[:self.current_index]
-            bt = self.bt[:self.current_index]
-            bidx = self.bidx[:self.current_index]
-            logits = self.logits[:self.current_index]
+            for buffer_name in self.buffers:
+                buffers[buffer_name[1:]] = getattr(self, buffer_name)[:self.current_index]
 
-        if bx.size(0) < amt:
-            if return_logits:
-                return bx, by, bt, logits
-            else:
-                return bx, by, bt
+        if self.current_index < amt:
+            return buffers
         else:
-            indices = torch.from_numpy(np.random.choice(bx.size(0), amt, replace=False))
-            indices = indices.to(self.bx.device)
+            idx_np = np.random.choice(buffers['x'].size(0), amt, replace=False)
+            indices = torch.from_numpy(idx_np).to(self.bx.device)
+            by_np = self.by.clone().cpu().data.numpy()
+            bx_np = self.bx.clone().cpu().data.numpy()
 
-            if aug:
-                # A la G-Dumb oui
-                transform = nn.Sequential(
-                        kornia.augmentation.RandomCrop(size=self.input_size[1:],padding=4),
-                    kornia.augmentation.RandomHorizontalFlip()
-                )
-                ret = transform(bx[indices])
-            else:
-                ret = bx[indices]
-            if return_logits:
-                return ret, by[indices], bt[indices], logits[indices]
-            else:
-                return ret, by[indices], bt[indices]
+            return OrderedDict({k:v[indices] for (k,v) in buffers.items()})
 
-    def split(self, amt):
-        indices = torch.randperm(self.current_index).to(self.args.device)
-        return indices[:amt], indices[amt:]
+    def sample_balanced(self, amt, exclude_task=None):
+        buffers = OrderedDict()
+
+        if exclude_task is not None:
+            assert hasattr(self, 'bt')
+            valid_indices = (self.bt != exclude_task).nonzero().squeeze()
+            for buffer_name in self.buffers:
+                buffers[buffer_name[1:]] = getattr(self, buffer_name)[valid_indices]
+        else:
+            for buffer_name in self.buffers:
+                buffers[buffer_name[1:]] = getattr(self, buffer_name)[:self.current_index]
+
+        class_count = buffers['y'].bincount()
+
+        # a sample's prob. of being sample is inv. prop to its class abundance
+        class_sample_p = 1. / class_count.float() / class_count.size(0)
+        per_sample_p   = class_sample_p.gather(0, buffers['y'])
+        indices        = torch.multinomial(per_sample_p, amt)
+
+        return OrderedDict({k:v[indices] for (k,v) in buffers.items()})
+
 
