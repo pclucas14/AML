@@ -15,7 +15,10 @@ class ER_ACE(ER):
         self.seen_so_far = torch.LongTensor(size=(0,)).to(self.buffer.device)
 
         # only works in the task-free setting
-        assert self.args.task_free
+        if not self.args.task_free:
+            print('setting ER-ACE as task-free')
+            self.args.task_free = True
+
 
     def process_inc(self, inc_data):
         """ get loss from incoming data """
@@ -39,3 +42,4 @@ class ER_ACE(ER):
         loss = self.loss(logits, inc_data['y'])
 
         return loss
+

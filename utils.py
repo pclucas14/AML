@@ -118,3 +118,59 @@ def download_file_from_google_drive(file_id, root, filename=None, md5=None):
             raise RuntimeError(msg)
 
         _save_response_content(response, fpath)
+
+
+# --- MIR utils
+''' For MIR '''
+def overwrite_grad(pp, new_grad, grad_dims):
+    """
+        This is used to overwrite the gradients with a new gradient
+        vector, whenever violations occur.
+        pp: parameters
+        newgrad: corrected gradient
+        grad_dims: list storing number of parameters at each layer
+    """
+    cnt = 0
+    for param in pp():
+        param.grad=torch.zeros_like(param.data)
+        beg = 0 if cnt == 0 else sum(grad_dims[:cnt])
+        en = sum(grad_dims[:cnt + 1])
+        this_grad = new_grad[beg: en].contiguous().view(
+            param.data.size())
+        param.grad.data.copy_(this_grad)
+        cnt += 1
+
+def get_grad_vector(pp, grad_dims):
+    """
+     gather the gradients in one vector
+    """
+    grads = torch.zeros(size=(sum(grad_dims),), device=pp[0].device)
+
+    cnt = 0
+    for param in pp:
+        if param.grad is not None:
+            beg = 0 if cnt == 0 else sum(grad_dims[:cnt])
+            en = sum(grad_dims[:cnt + 1])
+            grads[beg: en].copy_(param.grad.data.view(-1))
+        cnt += 1
+    return grads
+
+def get_future_step_parameters(this_net, grad_vector, grad_dims, lr=1):
+    """
+    computes \theta-\delta\theta
+    :param this_net:
+    :param grad_vector:
+    :return:
+    """
+    new_net=copy.deepcopy(this_net)
+    overwrite_grad(new_net.parameters,grad_vector,grad_dims)
+    with torch.no_grad():
+        for param in new_net.parameters():
+            if param.grad is not None:
+                param.data=param.data - lr*param.grad.data
+    return new_net
+
+def get_grad_dims(self):
+    self.grad_dims = []
+    for param in self.net.parameters():
+        self.grad_dims.append(param.data.numel())

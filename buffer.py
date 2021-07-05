@@ -8,6 +8,7 @@ import kornia
 
 from collections import OrderedDict
 from collections import Iterable
+from utils import *
 
 class Buffer(nn.Module):
     def __init__(
@@ -132,7 +133,7 @@ class Buffer(nn.Module):
             setattr(self, f'b{name}', buffer)
 
 
-    def sample_random(self, amt, exclude_task=None):
+    def sample_random(self, amt, exclude_task=None, **kwargs):
         buffers = OrderedDict()
 
         if exclude_task is not None:
@@ -154,7 +155,8 @@ class Buffer(nn.Module):
 
             return OrderedDict({k:v[indices] for (k,v) in buffers.items()})
 
-    def sample_balanced(self, amt, exclude_task=None):
+
+    def sample_balanced(self, amt, exclude_task=None, **kwargs):
         buffers = OrderedDict()
 
         if exclude_task is not None:
@@ -174,5 +176,91 @@ class Buffer(nn.Module):
         indices        = torch.multinomial(per_sample_p, amt)
 
         return OrderedDict({k:v[indices] for (k,v) in buffers.items()})
+
+
+    def sample_mir(self, amt, subsample, model, exclude_task=None, lr=0.1, **kwargs):
+        subsample = self.sample_random(subsample, exclude_task=exclude_task)
+        grad_dims = []
+        for param in model.parameters():
+            grad_dims.append(param.data.numel())
+
+        # TODO: has backward been called here ?
+        grad_vector = get_grad_vector(list(model.parameters()), grad_dims)
+        model_temp  = get_future_step_parameters(model, grad_vector, grad_dims, lr=lr)
+
+        with torch.no_grad():
+            logits_pre  = model(subsample['x'])
+            logits_post = model_temp(subsample['x'])
+
+            pre_loss  = F.cross_entropy(logits_pre,  subsample['y'], reduction='none')
+            post_loss = F.cross_entropy(logits_post, subsample['y'], reduction='none')
+
+            scores  = post_loss - pre_loss
+            indices = scores.sort(descending=True)[1][:amt]
+
+        return OrderedDict({k:v[indices] for (k,v) in subsample.items()})
+
+
+    def sample_pos_neg(self, inc_data, task_free=True):
+
+        x     = inc_data['x']
+        label = inc_data['y']
+        task  = torch.zeros_like(label).fill_(inc_data['t'])
+
+        # we need to create an "augmented" buffer containing the incoming data
+        bx   = torch.cat((self.bx[:self.current_index], x))
+        by   = torch.cat((self.by[:self.current_index], label))
+        bt   = torch.cat((self.bt[:self.current_index], task))
+        bidx = torch.arange(bx.size(0)).to(bx.device)
+
+        # buf_size x label_size
+        same_label = label.view(1, -1)             == by.view(-1, 1)
+        same_task  = task.view(1, -1)              == bt.view(-1, 1)
+        same_ex    = bidx[-x.size(0):].view(1, -1) == bidx.view(-1, 1)
+
+        task_labels = label.unique()
+        real_same_task = same_task
+
+        # TASK FREE METHOD : instead of using the task ID, we'll use labels in
+        # the current batch to mimic task
+        if task_free:
+            same_task = torch.zeros_like(same_task)
+
+            for label_ in task_labels:
+                label_exp = label_.view(1, -1).expand_as(same_task)
+                same_task = same_task | (label_exp == by.view(-1, 1))
+
+        valid_pos  = same_label & ~same_ex
+        valid_neg_same_t = ~same_label & same_task & ~same_ex
+        valid_neg_diff_t = ~same_label & ~same_task & ~same_ex
+
+        # remove points which don't have pos, neg from same and diff t
+        has_valid_pos = valid_pos.sum(0) > 0
+        has_valid_neg = (valid_neg_same_t.sum(0) > 0) & (valid_neg_diff_t.sum(0) > 0)
+
+        invalid_idx = (~has_valid_pos | ~has_valid_neg).nonzero().squeeze()
+
+        if invalid_idx.numel() > 0:
+            # so the fetching operation won't fail
+            valid_pos[:, invalid_idx] = 1
+            valid_neg_same_t[:, invalid_idx] = 1
+            valid_neg_diff_t[:, invalid_idx] = 1
+
+        # easier if invalid_idx is a binary tensor
+        is_invalid = torch.zeros_like(label).bool()
+        is_invalid[invalid_idx] = 1
+
+        # fetch positive samples
+        pos_idx = torch.multinomial(valid_pos.float().T, 1).squeeze(1)
+        neg_idx_same_t = torch.multinomial(valid_neg_same_t.float().T, 1).squeeze(1)
+        neg_idx_diff_t = torch.multinomial(valid_neg_diff_t.float().T, 1).squeeze(1)
+
+        return bx[pos_idx], \
+               bx[neg_idx_same_t], \
+               bx[neg_idx_diff_t], \
+               is_invalid, \
+               by[pos_idx], \
+               by[neg_idx_same_t], \
+               by[neg_idx_diff_t]
 
 

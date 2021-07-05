@@ -12,12 +12,13 @@ from buffer import Buffer
 from copy   import deepcopy
 from pydoc  import locate
 from model  import ResNet18, normalize
-from old_methods import get_method
+from methods import *
+# from old_methods import get_method
 
 # Arguments
 # -----------------------------------------------------------------------------------------
 
-METHODS = ['icarl', 'er', 'mask', 'triplet', 'iid', 'iid++', 'icarl_mask', 'icarl_triplet', 'er_multihead', 'der']
+METHODS = ['icarl', 'er', 'mask', 'er_aml', 'er_aml_triplet', 'iid', 'iid++', 'icarl_mask', 'icarl_triplet', 'er_multihead', 'der']
 DATASETS = ['split_cifar10', 'split_cifar100', 'miniimagenet']
 
 parser = argparse.ArgumentParser()
@@ -55,6 +56,7 @@ parser.add_argument('--lr', type=float, default=0.1)
 parser.add_argument('--margin', type=float, default=0.2)
 parser.add_argument('--buffer_neg', type=float, default=0)
 parser.add_argument('--incoming_neg', type=float, default=2.0)
+parser.add_argument('--supcon_temperature', type=float, default=0.2)
 
 # ICARL hparams
 parser.add_argument('--distill_coef', type=float, default=1.)
@@ -62,6 +64,9 @@ parser.add_argument('--distill_coef', type=float, default=1.)
 # DER params
 parser.add_argument('--alpha', type=float, default=.1)
 parser.add_argument('--beta', type=float, default=.5)
+
+# MIR params
+parser.add_argument('--subsample', type=int, default=50)
 
 parser.add_argument('--old', action='store_true')
 
@@ -132,7 +137,7 @@ model = ResNet18(
         args.n_classes,
         nf=20,
         input_size=args.input_size,
-        dist_linear=args.method in ['triplet', 'mask']
+        dist_linear=args.method in ['er_aml', 'er_aml_triplet', 'mask']
         )
 
 model = model.to(device)
@@ -151,13 +156,15 @@ print("buffer parameters: ", np.prod(buffer.bx.size()))
 if args.old:
     agent = get_method(args.method)(model, buffer, args)
 else:
-    import methods
+    # import methods
     if args.method == 'er':
-        from methods.er import ER
         agent = ER
     elif args.method == 'mask':
-        from methods.er_ace import ER_ACE
         agent = ER_ACE
+    elif args.method == 'er_aml_triplet':
+        agent = ER_AML_Triplet
+    elif args.method == 'er_aml':
+        agent = ER_AML
 
     agent = agent(model, buffer, args)
 
@@ -174,19 +181,19 @@ for task in range(args.n_tasks):
     #---------------
     # Minibatch Loop
 
-    for i, (data, target) in enumerate(train_loader):
+    for i, (x,y) in enumerate(train_loader):
 
         if n_seen > args.samples_per_task > 0: break
 
-        data = data.to(device)
-        target = target.to(device)
+        x = x.to(device)
+        y = y.to(device)
 
         if i==0:
             print('\nTask #{} --> Train Classifier\n'.format(task))
 
         #---------------
         # Iteration Loop
-        inc_data = {'x': data, 'y': target, 't': task}
+        inc_data = {'x': x, 'y': y, 't': task}
 
         for it in range(args.n_iters):
 
@@ -199,7 +206,7 @@ for task in range(args.n_tasks):
             else:
                 agent.observe(inc_data)
 
-        n_seen += data.size(0)
+        n_seen += x.size(0)
 
         if args.old:
             buffer.add(inc_data)

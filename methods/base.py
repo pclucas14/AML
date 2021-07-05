@@ -16,26 +16,6 @@ class Method():
         self.opt  = torch.optim.SGD(self.model.parameters(), lr=args.lr)
 
 
-    def _process(self, data):
-        """ get a loss signal from data """
-
-        pred = self.model(data['x'])
-        loss = self.loss(pred, data['y'])
-        return loss
-
-
-    def process_inc(self, inc_data):
-        """ get loss from incoming data """
-
-        return self._process(inc_data)
-
-
-    def process_re(self, re_data):
-        """ get loss from rehearsal data """
-
-        return self._process(re_data)
-
-
     def update(self, loss):
         """ update parameters from loss """
 
@@ -51,6 +31,8 @@ class Method():
 
 
     def predict(self, x):
+        """ used for test time prediction """
+
         return self.model(x)
 
 
