@@ -37,7 +37,7 @@ class Buffer(nn.Module):
         self.is_full       = 0
 
         # defaults
-        self.add = self.add_reservoir #balanced #reservoir
+        self.add = self.add_reservoir
         self.sample = self.sample_random
 
     @property
@@ -180,13 +180,15 @@ class Buffer(nn.Module):
 
     def sample_mir(self, amt, subsample, model, exclude_task=None, lr=0.1, **kwargs):
         subsample = self.sample_random(subsample, exclude_task=exclude_task)
-        grad_dims = []
-        for param in model.parameters():
-            grad_dims.append(param.data.numel())
+
+        if not hasattr(model, 'grad_dims'):
+            model.grad_dims = []
+            for param in model.parameters():
+                model.grad_dims += [param.data.numel()]
 
         # TODO: has backward been called here ?
-        grad_vector = get_grad_vector(list(model.parameters()), grad_dims)
-        model_temp  = get_future_step_parameters(model, grad_vector, grad_dims, lr=lr)
+        grad_vector = get_grad_vector(list(model.parameters()), model.grad_dims)
+        model_temp  = get_future_step_parameters(model, grad_vector, model.grad_dims, lr=lr)
 
         with torch.no_grad():
             logits_pre  = model(subsample['x'])

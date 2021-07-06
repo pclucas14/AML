@@ -174,3 +174,28 @@ def get_grad_dims(self):
     self.grad_dims = []
     for param in self.net.parameters():
         self.grad_dims.append(param.data.numel())
+
+# Taken from
+# https://github.com/aimagelab/mammoth/blob/cb9a36d788d6ad051c9eee0da358b25421d909f5/models/gem.py#L34
+def store_grad(params, grads, grad_dims):
+    """
+        This stores parameter gradients of past tasks.
+        pp: parameters
+        grads: gradients
+        grad_dims: list with number of parameters per layers
+    """
+    # store the gradients
+    grads.fill_(0.0)
+    count = 0
+    for param in params():
+        if param.grad is not None:
+            begin = 0 if count == 0 else sum(grad_dims[:count])
+            end = np.sum(grad_dims[:count + 1])
+            grads[begin: end].copy_(param.grad.data.view(-1))
+        count += 1
+
+# Taken from
+# https://github.com/aimagelab/mammoth/blob/cb9a36d788d6ad051c9eee0da358b25421d909f5/models/agem.py#L21
+def project(gxy: torch.Tensor, ger: torch.Tensor) -> torch.Tensor:
+    corr = torch.dot(gxy, ger) / torch.dot(ger, ger)
+    return gxy - corr * ger

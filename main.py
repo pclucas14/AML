@@ -18,7 +18,7 @@ from methods import *
 # Arguments
 # -----------------------------------------------------------------------------------------
 
-METHODS = ['icarl', 'er', 'mask', 'er_aml', 'er_aml_triplet', 'iid', 'iid++', 'icarl_mask', 'icarl_triplet', 'er_multihead', 'der']
+METHODS = ['icarl', 'er', 'mask', 'er_aml', 'er_aml_triplet', 'mir', 'iid', 'iid++', 'icarl', 'er_multihead', 'der', 'agem']
 DATASETS = ['split_cifar10', 'split_cifar100', 'miniimagenet']
 
 parser = argparse.ArgumentParser()
@@ -67,6 +67,7 @@ parser.add_argument('--beta', type=float, default=.5)
 
 # MIR params
 parser.add_argument('--subsample', type=int, default=50)
+parser.add_argument('--mir_head_only', type=int, default=0)
 
 parser.add_argument('--old', action='store_true')
 
@@ -165,6 +166,12 @@ else:
         agent = ER_AML_Triplet
     elif args.method == 'er_aml':
         agent = ER_AML
+    elif args.method == 'mir':
+        agent = MIR
+    elif args.method == 'icarl':
+        agent = ICARL
+    elif args.method == 'agem':
+        agent = AGEM
 
     agent = agent(model, buffer, args)
 

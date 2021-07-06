@@ -7,7 +7,6 @@ import random
 from methods.base import Method
 from methods.er   import ER
 
-# Abstract Class
 class ER_ACE(ER):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

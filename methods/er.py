@@ -5,8 +5,8 @@ import torch.nn.functional as F
 import numpy as np
 
 from methods.base import Method
+from utils import *
 
-# Abstract Class
 class ER(Method):
     def __init__(self, model, buffer, args):
         super(ER, self).__init__(model, buffer, args)
