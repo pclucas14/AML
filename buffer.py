@@ -178,21 +178,33 @@ class Buffer(nn.Module):
         return OrderedDict({k:v[indices] for (k,v) in buffers.items()})
 
 
-    def sample_mir(self, amt, subsample, model, exclude_task=None, lr=0.1, **kwargs):
+    def sample_mir(self, amt, subsample, model, exclude_task=None, lr=0.1, head_only=False, **kwargs):
         subsample = self.sample_random(subsample, exclude_task=exclude_task)
 
         if not hasattr(model, 'grad_dims'):
-            model.grad_dims = []
-            for param in model.parameters():
-                model.grad_dims += [param.data.numel()]
+            model.mir_grad_dims = []
+            if head_only:
+                for param in model.linear.parameters():
+                    model.mir_grad_dims += [param.data.numel()]
+            else:
+                for param in model.parameters():
+                    model.mir_grad_dims += [param.data.numel()]
 
-        # TODO: has backward been called here ?
-        grad_vector = get_grad_vector(list(model.parameters()), model.grad_dims)
-        model_temp  = get_future_step_parameters(model, grad_vector, model.grad_dims, lr=lr)
+        if head_only:
+            grad_vector = get_grad_vector(list(model.linear.parameters()), model.mir_grad_dims)
+            model_temp  = get_future_step_parameters(model.linear, grad_vector, model.mir_grad_dims, lr=lr)
+        else:
+            grad_vector = get_grad_vector(list(model.parameters()), model.mir_grad_dims)
+            model_temp  = get_future_step_parameters(model, grad_vector, model.mir_grad_dims, lr=lr)
 
         with torch.no_grad():
-            logits_pre  = model(subsample['x'])
-            logits_post = model_temp(subsample['x'])
+            hidden_pre  = model.return_hidden(subsample['x'])
+            logits_pre  = model.linear(hidden_pre)
+
+            if head_only:
+                logits_post = model_temp(hidden_pre)
+            else:
+                logits_post = model_temp(subsample['x'])
 
             pre_loss  = F.cross_entropy(logits_pre,  subsample['y'], reduction='none')
             post_loss = F.cross_entropy(logits_post, subsample['y'], reduction='none')

@@ -12,7 +12,7 @@ class MIR(ER):
         super().__init__(model, buffer, args)
 
         self.buffer.sample = self.buffer.sample_mir
-        self.sample_kwargs['mir_head_only'] = args.mir_head_only
+        self.sample_kwargs['head_only'] = args.mir_head_only
 
     def observe(self, inc_data):
         """ full step of processing and learning from data """

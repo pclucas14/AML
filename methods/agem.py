@@ -19,6 +19,8 @@ class AGEM(ER):
         self.grad_inc = torch.zeros(np.sum(self.grad_dims)).to(device)
         self.grad_re  = torch.zeros(np.sum(self.grad_dims)).to(device)
 
+    def overwrite_grad(self, projected_grad):
+        overwrite_grad(self.model.parameters, projected_grad, self.grad_dims)
 
     def observe(self, inc_data):
         """ full step of processing and learning from data """
@@ -62,14 +64,19 @@ class AGEM(ER):
                 dot_p = torch.dot(self.grad_inc, self.grad_re)
                 if dot_p < 0.:
                     proj_grad = project(gxy=self.grad_inc, ger=self.grad_re)
-                    # overwrite_grad(self.model.parameters, proj_grad, self.grad_dims)
-                    overwrite_grad(self.model.parameters, proj_grad + self.grad_re, self.grad_dims)
                 else:
-                    overwrite_grad(self.model.parameters, self.grad_inc + self.grad_re, self.grad_dims)
+                    proj_grad = self.grad_inc
+
+                self.overwrite_grad(proj_grad)
 
         self.opt.step()
 
         # --- buffer overhead --- #
         self.buffer.add(inc_data)
+
+
+class AGEMpp(AGEM):
+    def overwrite_grad(self, projected_grad):
+        overwrite_grad(self.model.parameters, projected_grad + self.grad_re, self.grad_dims)
 
 

@@ -8,6 +8,7 @@ import numpy as np
 # Abstract Class
 class Method():
     def __init__(self, model, buffer, args):
+
         self.args   = args
         self.model  = model
         self.buffer = buffer

@@ -18,7 +18,7 @@ from methods import *
 # Arguments
 # -----------------------------------------------------------------------------------------
 
-METHODS = ['icarl', 'er', 'mask', 'er_aml', 'er_aml_triplet', 'mir', 'iid', 'iid++', 'icarl', 'er_multihead', 'der', 'agem']
+METHODS = ['icarl', 'er', 'mask', 'er_aml', 'er_aml_triplet', 'mir', 'iid', 'iid++', 'icarl', 'er_multihead', 'der', 'agem', 'agem_pp', 'cope']
 DATASETS = ['split_cifar10', 'split_cifar100', 'miniimagenet']
 
 parser = argparse.ArgumentParser()
@@ -68,6 +68,10 @@ parser.add_argument('--beta', type=float, default=.5)
 # MIR params
 parser.add_argument('--subsample', type=int, default=50)
 parser.add_argument('--mir_head_only', type=int, default=0)
+
+# CoPE params
+parser.add_argument('--momentum', type=float, default=0.99)
+parser.add_argument('--cope_temperature', type=float, default=0.1)
 
 parser.add_argument('--old', action='store_true')
 
@@ -172,6 +176,10 @@ else:
         agent = ICARL
     elif args.method == 'agem':
         agent = AGEM
+    elif args.method == 'agem_pp':
+        agent = AGEMpp
+    elif args.method == 'cope':
+        agent = CoPE
 
     agent = agent(model, buffer, args)
 
