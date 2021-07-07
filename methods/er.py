@@ -8,21 +8,23 @@ from methods.base import Method
 from utils import *
 
 class ER(Method):
-    def __init__(self, model, buffer, args):
-        super(ER, self).__init__(model, buffer, args)
+    def __init__(self, model, train_tf, args):
+        super(ER, self).__init__(model, train_tf, args)
+
+        # note that this is not used for task-free methods
+        self.task = torch.LongTensor([0]).to(self.device)
 
         self.sample_kwargs = {
-            'lr':        args.lr,
-            'amt':       args.buffer_batch_size,
-            'model':     self.model,
-            'subsample': args.subsample,
+            'amt':          args.buffer_batch_size,
+            'exclude_task': None if args.task_free else self.task,
         }
 
     def _process(self, data):
         """ get a loss signal from data """
 
-        pred = self.model(data['x'])
-        loss = self.loss(pred, data['y'])
+        aug_data = self.train_tf(data['x'])
+        pred     = self.model(aug_data)
+        loss     = self.loss(pred, data['y'])
         return loss
 
 
@@ -41,6 +43,9 @@ class ER(Method):
     def observe(self, inc_data):
         """ full step of processing and learning from data """
 
+        # keep track of current task for task-based methods
+        self.task.fill_(inc_data['t'])
+
         # --- training --- #
         inc_loss = self.process_inc(inc_data)
 
@@ -48,20 +53,11 @@ class ER(Method):
         if len(self.buffer) > 0:
 
             # -- rehearsal starts ASAP. No task id is used
-            if self.args.task_free:
+            if self.args.task_free or self.task > 0:
                 re_data = self.buffer.sample(
                         **self.sample_kwargs
                 )
 
-            # -- rehearsal starts after 1st task. Exclude
-            # -- current task labels from the draw.
-            elif inc_data['t'] > 0:
-                re_data = self.buffer.sample(
-                        exclude_task=inc_data['t'],
-                        **self.sample_kwargs
-                )
-
-            if re_data is not None:
                 re_loss = self.process_re(re_data)
 
         self.update(inc_loss + re_loss)

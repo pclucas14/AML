@@ -8,8 +8,8 @@ from copy import deepcopy
 from methods.er import ER
 
 class ICARL(ER):
-    def __init__(self, model, buffer, args):
-        super(ICARL, self).__init__(model, buffer, args)
+    def __init__(self, model, train_tf, args):
+        super(ICARL, self).__init__(model, train_tf, args)
 
         assert not args.task_free or args.distill_coef == 0.
 

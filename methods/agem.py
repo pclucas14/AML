@@ -8,22 +8,26 @@ from methods.er import ER
 from utils import *
 
 class AGEM(ER):
-    def __init__(self, model, buffer, args):
-        super().__init__(model, buffer, args)
+    def __init__(self, model, train_tf, args):
+        super().__init__(model, train_tf, args)
 
         self.grad_dims = []
         for param in model.parameters():
             self.grad_dims += [param.data.numel()]
 
-        device = next(model.parameters()).device
-        self.grad_inc = torch.zeros(np.sum(self.grad_dims)).to(device)
-        self.grad_re  = torch.zeros(np.sum(self.grad_dims)).to(device)
+        self.grad_inc = torch.zeros(np.sum(self.grad_dims)).to(self.device)
+        self.grad_re  = torch.zeros(np.sum(self.grad_dims)).to(self.device)
+
 
     def overwrite_grad(self, projected_grad):
         overwrite_grad(self.model.parameters, projected_grad, self.grad_dims)
 
+
     def observe(self, inc_data):
         """ full step of processing and learning from data """
+
+        # keep track of current task for task-based methods
+        self.task.fill_(inc_data['t'])
 
         self.opt.zero_grad()
 
@@ -35,20 +39,11 @@ class AGEM(ER):
         if len(self.buffer) > 0:
 
             # -- rehearsal starts ASAP. No task id is used
-            if self.args.task_free:
+            if self.args.task_free or self.task > 0:
                 re_data = self.buffer.sample(
                         **self.sample_kwargs
                 )
 
-            # -- rehearsal starts after 1st task. Exclude
-            # -- current task labels from the draw.
-            elif inc_data['t'] > 0:
-                re_data = self.buffer.sample(
-                        exclude_task=inc_data['t'],
-                        **self.sample_kwargs
-                )
-
-            if re_data is not None:
                 # store grad
                 store_grad(self.model.parameters, self.grad_inc, self.grad_dims)
 

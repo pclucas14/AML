@@ -44,6 +44,10 @@ class Buffer(nn.Module):
     def device(self):
         return getattr(self, self.buffers[0]).device
 
+    def add_buffer(self, name, dtype, size):
+        tmp = dtype(size=(self.cap,) + size).fill_(0).to(self.device)
+        self.register_buffer(f'b{name}', tmp)
+        self.buffers += [f'b{name}']
 
     def __len__(self):
         return self.current_index
@@ -138,14 +142,17 @@ class Buffer(nn.Module):
 
         if exclude_task is not None:
             assert hasattr(self, 'bt')
-            valid_indices = (self.bt != exclude_task).nonzero().squeeze()
+            valid_indices = torch.where(self.bt != exclude_task)[0]
+            valid_indices = valid_indices[valid_indices < self.current_index]
             for buffer_name in self.buffers:
                 buffers[buffer_name[1:]] = getattr(self, buffer_name)[valid_indices]
         else:
             for buffer_name in self.buffers:
                 buffers[buffer_name[1:]] = getattr(self, buffer_name)[:self.current_index]
 
-        if self.current_index < amt:
+        n_selected = buffers['x'].size(0)
+        if n_selected <= amt:
+            assert n_selected > 0
             return buffers
         else:
             idx_np = np.random.choice(buffers['x'].size(0), amt, replace=False)

@@ -7,38 +7,45 @@ from copy import deepcopy
 
 from methods.er import ER
 
+""" This is still incomplete, need to double check a few things """
+
 class CoPE(ER):
-    def __init__(self, model, buffer, args):
-        super().__init__(model, buffer, args)
+    def __init__(self, model, train_tf, args):
+        super().__init__(model, train_tf, args)
 
         n_classes = model.linear.weight.size(0)
         self.momentum = args.momentum
         self.cope_temperature = args.cope_temperature
-        device = next(model.parameters()).device
 
         # creating as buffer so no grad is sent back
-        self._prototypes  = torch.rand_like(model.linear.weight).to(device).uniform_(0, 1. / n_classes)
-        self.proto_labels = torch.arange(n_classes).to(device)
+        self._prototypes  = torch.rand_like(model.linear.weight).uniform_(0, 1)
+        self.proto_labels = torch.arange(n_classes).to(self.device)
 
         delattr(model, 'linear')
 
         #self.buffer.sample = self.buffer.sample_balanced
         #self.buffer.add    = self.buffer.add_balanced
+        self.seen_so_far = torch.LongTensor(size=(0,)).to(self.device)
 
 
     @property
     def prototypes(self):
-        return F.normalize(self._prototypes, dim=-1)
+        return F.normalize(self._prototypes, dim=-1)[self.seen_so_far]
 
 
     def _process(self, data):
         """ get a loss signal from data """
 
-        hidden = F.normalize(self.model.return_hidden(data['x']), dim=-1)
-        protos = self.prototypes
+        # potentially augment data
+        aug_data = self.train_tf(data['x'])
 
+        hidden   = F.normalize(self.model.return_hidden(aug_data), dim=-1)
+        protos   = self.prototypes
+
+        n_inc   = data['x'].size(0)
+        n_proto = protos.size(0)
         all_hid    = torch.cat((hidden, protos))
-        all_labels = torch.cat((data['y'], self.proto_labels))
+        all_labels = torch.cat((data['y'], self.seen_so_far))
 
         same_label = all_labels.view(1, -1) == all_labels.view(-1, 1)
         diff_mask  = ~same_label
@@ -50,11 +57,22 @@ class CoPE(ER):
         # compute distances across
         similarity = torch.exp(torch.mm(all_hid, all_hid.T) / self.cope_temperature)
 
-        pos = torch.sum(similarity * pos_mask, 1).clamp_(min=1e-6)
-        neg = torch.sum(similarity * diff_mask, 1).clamp_(min=1e-6)
-        loss = -(torch.mean(torch.log(pos / (pos + neg))))
+        pos_sim = similarity * pos_mask
+        neg_sim = similarity * diff_mask
 
-        return loss, hidden.detach(), data['y']
+        # similiarity with incoming data
+        pos_inc = pos_sim[:n_inc, :n_inc].sum()
+        neg_inc = neg_sim[:n_inc, :n_inc].sum()
+
+        # similarity with prototypes
+        pos_proto = pos_sim[:n_inc, -n_proto:].sum()
+        neg_proto = neg_sim[:n_inc, -n_proto:].sum()
+
+        loss = -(torch.mean(torch.log(pos_sim / (pos_sim + neg_sim))))
+
+        new_loss = -(torch.mean(torch.log((pos_inc + pos_proto) / (pos_inc + pos_proto + neg_inc + neg_proto))))
+
+        return new_loss, hidden.detach(), data['y']
 
 
     def process_inc(self, inc_data):
@@ -97,45 +115,17 @@ class CoPE(ER):
         protos = protos / count.view(-1, 1)
 
         # momentum update
-        self._prototypes[count > 0] = self.momentum * self.prototypes[count > 0] \
+        self._prototypes[count > 0] = self.momentum * F.normalize(self._prototypes[count > 0], dim=-1) \
                                     + (1 - self.momentum) * protos[count > 0]
 
 
     def observe(self, inc_data):
         """ full step of processing and learning from data """
 
-        # --- To be consistent with the original implementation, we concat
-        # --- the incoming and rehearsal data
+        present = inc_data['y'].unique()
+        self.seen_so_far = torch.cat([self.seen_so_far, present]).unique()
 
-        # --- training --- #
-        inc_loss = self.process_inc(inc_data)
-
-        re_loss, re_data = 0., None
-        if len(self.buffer) > 0:
-
-            # -- rehearsal starts ASAP. No task id is used
-            if self.args.task_free:
-                re_data = self.buffer.sample(
-                        **self.sample_kwargs
-                )
-
-            # -- rehearsal starts after 1st task. Exclude
-            # -- current task labels from the draw.
-            elif inc_data['t'] > 0:
-                re_data = self.buffer.sample(
-                        exclude_task=inc_data['t'],
-                        **self.sample_kwargs
-                )
-
-            if re_data is not None:
-                re_loss = self.process_re(re_data)
-
-        self.update(inc_loss + re_loss)
-
-        # --- buffer overhead --- #
-        self.buffer.add(inc_data)
-
-
+        super().observe(inc_data)
 
         self._update_prototypes()
 
@@ -145,6 +135,6 @@ class CoPE(ER):
 
         # calculate distance matrix between incoming and _centroids
         hid_x  = F.normalize(self.model.return_hidden(x), dim=-1) # bs x D
-        dist   = (self.prototypes.unsqueeze(0) - hid_x.unsqueeze(1)).pow(2).sum(-1)
-
-        return -dist
+        # dist   = (self.prototypes.unsqueeze(0) - hid_x.unsqueeze(1)).pow(2).sum(-1)
+        # return -dist
+        return torch.mm(hid_x, self.prototypes.T)

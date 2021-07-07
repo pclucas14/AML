@@ -11,12 +11,13 @@ class ER_ACE(ER):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.seen_so_far = torch.LongTensor(size=(0,)).to(self.buffer.device)
+        self.seen_so_far = torch.LongTensor(size=(0,)).to(self.device)
 
         # only works in the task-free setting
         if not self.args.task_free:
             print('setting ER-ACE as task-free')
             self.args.task_free = True
+            self.sample_kwargs['exclude_task'] = None
 
 
     def process_inc(self, inc_data):

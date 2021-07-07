@@ -3,15 +3,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import numpy as np
+from buffer import Buffer
 
 
 # Abstract Class
 class Method():
-    def __init__(self, model, buffer, args):
+    def __init__(self, model, train_tf, args):
 
-        self.args   = args
-        self.model  = model
-        self.buffer = buffer
+        self.args     = args
+        self.model    = model
+        self.train_tf = train_tf
+
+        self.device = next(model.parameters()).device
+        self.buffer = Buffer(capacity=args.mem_size).to(self.device)
 
         self.loss = F.cross_entropy
         self.opt  = torch.optim.SGD(self.model.parameters(), lr=args.lr)

@@ -5,20 +5,18 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 
-from copy import deepcopy
-from data   import *
-from utils  import get_logger, get_temp_logger, logging_per_task, sho_
-from buffer import Buffer
-from copy   import deepcopy
-from pydoc  import locate
-from model  import ResNet18, normalize
-from methods import *
-# from old_methods import get_method
+from copy      import deepcopy
+from data.base import *
+from utils     import get_logger, get_temp_logger, logging_per_task, sho_
+from copy      import deepcopy
+from pydoc     import locate
+from model     import ResNet18, normalize
+from methods   import *
 
 # Arguments
 # -----------------------------------------------------------------------------------------
 
-METHODS = ['icarl', 'er', 'mask', 'er_aml', 'er_aml_triplet', 'mir', 'iid', 'iid++', 'icarl', 'er_multihead', 'der', 'agem', 'agem_pp', 'cope']
+METHODS = ['icarl', 'er', 'mask', 'er_aml', 'er_aml_triplet', 'mir', 'iid', 'iid++', 'icarl', 'er_multihead', 'der', 'agem', 'agem_pp', 'cope', 'der', 'der_pp']
 DATASETS = ['split_cifar10', 'split_cifar100', 'miniimagenet']
 
 parser = argparse.ArgumentParser()
@@ -31,6 +29,7 @@ parser.add_argument('--buffer_batch_size', type=int, default=10)
 parser.add_argument('-m','--method', type=str, default='er', choices=METHODS)
 
 """ data """
+parser.add_argument('--H', type=int, default=None)
 parser.add_argument('--download', type=int, default=0)
 parser.add_argument('--n_workers', type=int, default=8)
 parser.add_argument('--data_root', type=str, default='../cl-pytorch/data')
@@ -40,7 +39,7 @@ parser.add_argument('--dataset', type=str, default='split_cifar10', choices=DATA
 parser.add_argument('--n_iters', type=int, default=1)
 parser.add_argument('--n_tasks', type=int, default=-1)
 parser.add_argument('--task_free', type=int, default=0)
-parser.add_argument('--use_augmentations', type=int, default=0)
+parser.add_argument('--use_augs', type=int, default=0)
 parser.add_argument('--samples_per_task', type=int, default=-1)
 parser.add_argument('--mem_size', type=int, default=20, help='controls buffer size')
 
@@ -91,7 +90,8 @@ else:
     device = 'cpu'
 
 # make dataloaders
-train_loader, val_loader, test_loader  = get_data(args)
+train_tf, train_loader, val_loader, test_loader  = get_data_and_tfs(args)
+train_tf.to(device)
 
 if args.wandb_log != 'off':
     import wandb
@@ -104,8 +104,10 @@ args.mem_size = args.mem_size * args.n_classes
 
 LOG = get_logger(['cls_loss', 'acc'], n_tasks=args.n_tasks)
 
+
 # Eval model
 # -----------------------------------------------------------------------------------------
+
 @torch.no_grad()
 def eval_agent(agent, loader, task, mode='valid'):
     agent.eval()
@@ -151,15 +153,9 @@ model.train()
 if args.old:
     opt = torch.optim.SGD(model.parameters(), lr=args.lr)
 
-buffer = Buffer(capacity=args.mem_size).to(device)
-
-print("number of classifier parameters:",
-        sum([np.prod(p.size()) for p in model.parameters()]))
-print("buffer parameters: ", np.prod(buffer.bx.size()))
-
 # Build Method wrapper
 if args.old:
-    agent = get_method(args.method)(model, buffer, args)
+    agent = get_method(args.method)(model, train_tf, args)
 else:
     # import methods
     if args.method == 'er':
@@ -180,8 +176,17 @@ else:
         agent = AGEMpp
     elif args.method == 'cope':
         agent = CoPE
+    elif args.method == 'der':
+        agent = DER
+    elif args.method == 'der_pp':
+        agent = DERpp
 
-    agent = agent(model, buffer, args)
+    agent = agent(model, train_tf, args)
+
+print("number of classifier parameters:",
+        sum([np.prod(p.size()) for p in model.parameters()]))
+print("buffer parameters: ", np.prod(agent.buffer.bx.size()))
+
 
 #----------
 # Task Loop

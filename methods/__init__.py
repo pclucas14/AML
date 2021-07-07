@@ -5,3 +5,4 @@ from .mir import MIR
 from .icarl import ICARL
 from .agem import AGEM, AGEMpp
 from .cope import CoPE
+from .der import DER, DERpp

@@ -6,36 +6,9 @@ import numpy as np
 
 from copy import deepcopy
 from torchvision import datasets, transforms
-from utils import download_file_from_google_drive
+from data import *
 
-""" Datasets """
-class MiniImagenet(datasets.ImageFolder):
-
-    def __init__(self, root, train=True, transform=None, download=False):
-
-        if download:
-            dump_path = os.path.join(root, 'miniimagenet')
-            if os.path.exists(dump_path):
-                print('MiniIm directory exists, skipping download')
-            else:
-                download_file_from_google_drive(
-                    '1f-AR7gWPOvo5Noxi25hDE8LD878oa5vc',
-                    root,
-                    'miniim.tar.gz'
-                )
-                os.system('cd miniimagenet & tar -xvf miniim.tar.gz')
-
-        path = os.path.join(root, 'miniimagenet', 'train' if train else 'test')
-        print(path)
-        super(MiniImagenet, self).__init__(
-            root=path,
-            transform=transform
-        )
-
-        self.data = np.array([x[0] for x in self.samples])
-
-
-""" Samplers """
+# ---  Samplers --- #
 class ContinualSampler(torch.utils.data.Sampler):
 
     def __init__(self, dataset, n_tasks):
@@ -108,46 +81,33 @@ def make_val_from_train(dataset, split=.95):
     return train_ds, val_ds
 
 
-def get_data(args):
-    dataset = {'split_cifar10': datasets.CIFAR10,
-               'split_cifar100': datasets.CIFAR100,
-               'miniimagenet': MiniImagenet}[args.dataset]
+def get_data_and_tfs(args):
+    dataset = {'split_cifar10' : CIFAR10,
+               'split_cifar100': CIFAR100,
+               'miniimagenet'  : MiniImagenet}[args.dataset]
 
     if args.n_tasks == -1:
-        args.n_tasks = {'split_cifar10': 5,
-                        'split_cifar100': 20,
-                        'miniimagenet': 20}[args.dataset]
+        args.n_tasks = dataset.default_n_tasks
 
-    # same transforms for all methods
-    tfs = transforms.Compose([
-        transforms.ToTensor(),
-        lambda x : (x - .5) * 2
-        ])
+    if args.H is None:
+        H = dataset.default_size
+    else:
+        H = args.H
 
-    args.input_size = (3, 32, 32)
-    if args.dataset == 'miniimagenet':
-        args.input_size = (3, 84, 84)
-        tfs = transforms.Compose([
-            transforms.Resize(84),
-            transforms.CenterCrop(84),
-            tfs
-        ])
+    args.input_size = (3, H, H)
 
-    trainval_ds = dataset(
-        train=True,
-        transform=tfs,
-        root=args.data_root,
-        download=args.download
-    )
+    base_tf  = dataset.base_transforms(H=H)
+    train_tf = dataset.train_transforms(H=H, use_augs=args.use_augs)
+    eval_tf  = dataset.eval_transforms(H=H)
 
-    test_ds = dataset(
-        train=False,
-        transform=tfs,
-        root=args.data_root,
-        download=args.download
-    )
+    ds_kwargs = {'root': args.data_root, 'download': args.download}
 
+    trainval_ds      = dataset(train=True, **ds_kwargs)
+    test_ds          = dataset(train=False, transform=eval_tf, **ds_kwargs)
     train_ds, val_ds = make_val_from_train(trainval_ds)
+
+    train_ds.transform = base_tf
+    val_ds.transform   = eval_tf
 
     train_sampler = ContinualSampler(train_ds, args.n_tasks)
     val_sampler   = ContinualSampler(val_ds,   args.n_tasks)
@@ -176,4 +136,4 @@ def get_data(args):
         num_workers=args.n_workers
     )
 
-    return train_loader, val_loader, test_loader
+    return train_tf, train_loader, val_loader, test_loader

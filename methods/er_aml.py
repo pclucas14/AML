@@ -8,6 +8,13 @@ from methods.er import ER
 from model import normalize
 
 class ER_AML(ER):
+    def __init__(self, model, train_tf, args):
+        super(ER_AML, self).__init__(model, train_tf, args)
+
+        # can still be task-based, but we want to sample
+        # across all classes in the sampling process
+        self.sample_kwargs['exclude_task'] = None
+
 
     def sup_con_loss(self, anchor_feature, features, anch_labels=None, labels=None,
                     mask=None, temperature=0.1, base_temperature=0.07):
@@ -107,31 +114,6 @@ class ER_AML(ER):
             loss = self.loss(self.model(inc_data['x']), inc_data['y'])
 
         return loss
-
-
-    def observe(self, inc_data):
-        """ full step of processing and learning from data """
-
-        # --- training --- #
-        inc_loss = self.process_inc(inc_data)
-
-        re_loss, re_data = 0., None
-        if len(self.buffer) > 0:
-
-            # -- rehearsal starts ASAP. No task id is used
-            if inc_data['t'] > 0 or self.args.task_free:
-                re_data = self.buffer.sample(
-                        **self.sample_kwargs
-                )
-
-            if re_data is not None:
-                re_loss = self.process_re(re_data)
-
-        self.update(inc_loss + re_loss)
-
-        # --- buffer overhead --- #
-        self.buffer.add(inc_data)
-
 
 
 class ER_AML_Triplet(ER_AML):

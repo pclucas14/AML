@@ -8,11 +8,17 @@ from methods.er import ER
 from utils import *
 
 class MIR(ER):
-    def __init__(self, model, buffer, args):
-        super().__init__(model, buffer, args)
+    def __init__(self, model, train_tf, args):
+        super().__init__(model, train_tf, args)
 
         self.buffer.sample = self.buffer.sample_mir
-        self.sample_kwargs['head_only'] = args.mir_head_only
+
+        self.sample_kwargs.update({
+            'lr': args.lr,
+            'model': self.model,
+            'subsample': args.subsample,
+            'head_only': args.mir_head_only,
+        })
 
     def observe(self, inc_data):
         """ full step of processing and learning from data """
