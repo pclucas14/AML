@@ -102,19 +102,17 @@ def get_data_and_tfs(args):
 
     ds_kwargs = {'root': args.data_root, 'download': args.download}
 
-    trainval_ds      = dataset(train=True, **ds_kwargs)
-    test_ds          = dataset(train=False, transform=eval_tf, **ds_kwargs)
-    train_ds, val_ds = make_val_from_train(trainval_ds)
-
-    train_ds.transform = base_tf
-    val_ds.transform   = eval_tf
+    val_ds = test_ds = None
+    if args.validation:
+        trainval_ds      = dataset(train=True, **ds_kwargs)
+        train_ds, val_ds = make_val_from_train(trainval_ds)
+        train_ds.transform = base_tf
+        val_ds.transform   = eval_tf
+    else:
+        train_ds         = dataset(train=True, transform=base_tf, **ds_kwargs)
+        test_ds          = dataset(train=False, transform=eval_tf, **ds_kwargs)
 
     train_sampler = ContinualSampler(train_ds, args.n_tasks)
-    val_sampler   = ContinualSampler(val_ds,   args.n_tasks)
-    test_sampler  = ContinualSampler(test_ds,  args.n_tasks)
-
-    args.n_classes = train_sampler.n_classes
-
     train_loader  = torch.utils.data.DataLoader(
         train_ds,
         sampler=train_sampler,
@@ -122,18 +120,27 @@ def get_data_and_tfs(args):
         batch_size=args.batch_size,
     )
 
-    val_loader = torch.utils.data.DataLoader(
-        val_ds,
-        batch_size=128,
-        sampler=val_sampler,
-        num_workers=args.n_workers
-    )
+    if val_ds is not None:
+        val_sampler = ContinualSampler(val_ds, args.n_tasks)
+        test_loader = None
+        val_loader  = torch.utils.data.DataLoader(
+            val_ds,
+            batch_size=128,
+            sampler=val_sampler,
+            num_workers=args.n_workers
+        )
 
-    test_loader = torch.utils.data.DataLoader(
-        test_ds,
-        batch_size=128,
-        sampler=test_sampler,
-        num_workers=args.n_workers
-    )
+    elif test_ds is not None:
+        test_sampler  = ContinualSampler(test_ds,  args.n_tasks)
+        val_loader  = None
+        test_loader = torch.utils.data.DataLoader(
+            test_ds,
+            batch_size=128,
+            sampler=test_sampler,
+            num_workers=args.n_workers
+        )
+
+
+    args.n_classes = train_sampler.n_classes
 
     return train_tf, train_loader, val_loader, test_loader

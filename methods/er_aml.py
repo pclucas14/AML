@@ -8,12 +8,20 @@ from methods.er import ER
 from model import normalize
 
 class ER_AML(ER):
-    def __init__(self, model, train_tf, args):
-        super(ER_AML, self).__init__(model, train_tf, args)
+    def __init__(self, model, logger, train_tf, args):
+        super(ER_AML, self).__init__(model, logger, train_tf, args)
 
         # can still be task-based, but we want to sample
         # across all classes in the sampling process
         self.sample_kwargs['exclude_task'] = None
+
+        self.n_fwd_inc = 0
+        self.n_fwd_inc_cnt = 0
+
+
+    @property
+    def cost(self):
+        return 2 * (self.n_fwd_inc / self.n_fwd_inc_cnt + self.args.buffer_batch_size) / self.args.batch_size
 
 
     def sup_con_loss(self, anchor_feature, features, anch_labels=None, labels=None,
@@ -73,35 +81,38 @@ class ER_AML(ER):
     def process_inc(self, inc_data):
         """ get loss from incoming data """
 
+        n_fwd = 0
+
         if inc_data['t'] > 0 or (self.args.task_free and len(self.buffer) > 0):
             # do fancy pos neg
-            pos_x, neg_x_same_t, neg_x_diff_t, invalid_idx, pos_y, neg_y_same_t, _ = \
+            pos_x, neg_x, pos_y, neg_y, invalid_idx, n_fwd = \
                     self.buffer.sample_pos_neg(
                         inc_data,
-                        task_free=self.args.task_free
+                        task_free=self.args.task_free,
+                        same_task_neg=True
                     )
 
             # normalized hidden incoming
             hidden  = self.model.return_hidden(inc_data['x'])
             hidden_norm = normalize(hidden[~invalid_idx])
 
-            all_xs  = torch.cat((pos_x, neg_x_same_t))
+            all_xs  = torch.cat((pos_x, neg_x))
             all_hid = normalize(self.model.return_hidden(all_xs))
             all_hid = all_hid.reshape(2, pos_x.size(0), -1)
-            pos_hid, neg_hid_same_t = all_hid[:, ~invalid_idx]
+            pos_hid, neg_hid = all_hid[:, ~invalid_idx]
 
             if (~invalid_idx).any():
 
-                inc_data['y'] = inc_data['y'][~invalid_idx]
+                inc_y = inc_data['y'][~invalid_idx]
                 pos_y = pos_y[~invalid_idx]
-                neg_y_same_t = neg_y_same_t[~invalid_idx]
-                hid_all = torch.cat((pos_hid, neg_hid_same_t), dim=0)
-                y_all = torch.cat((pos_y, neg_y_same_t), dim=0)
+                neg_y = neg_y[~invalid_idx]
+                hid_all = torch.cat((pos_hid, neg_hid), dim=0)
+                y_all   = torch.cat((pos_y, neg_y), dim=0)
 
                 loss = self.sup_con_loss(
                         labels=y_all,
                         features=hid_all.unsqueeze(1),
-                        anch_labels=inc_data['y'].repeat(2),
+                        anch_labels=inc_y.repeat(2),
                         anchor_feature=hidden_norm.repeat(2, 1),
                         temperature=self.args.supcon_temperature,
                 )
@@ -113,6 +124,9 @@ class ER_AML(ER):
             # do regular training at the start
             loss = self.loss(self.model(inc_data['x']), inc_data['y'])
 
+        self.n_fwd_inc += (n_fwd + inc_data['x'].size(0))
+        self.n_fwd_inc_cnt += 1
+
         return loss
 
 
@@ -121,24 +135,20 @@ class ER_AML_Triplet(ER_AML):
     def process_inc(self, inc_data):
         """ get loss from incoming data """
 
+
         if inc_data['t'] > 0 or (self.args.task_free and len(self.buffer) > 0):
             # do fancy pos neg
-            pos_x, neg_x_same_t, neg_x_diff_t, invalid_idx, _, _, _ = \
+            pos_x, neg_x, pos_y, neg_y, invalid_idx, n_fwd = \
                     self.buffer.sample_pos_neg(
                         inc_data,
-                        task_free=self.args.task_free
+                        task_free=self.args.task_free,
+                        same_task_neg=True
                     )
 
-            if self.args.buffer_neg > 0:
-                all_xs  = torch.cat((pos_x, neg_x_same_t, neg_x_diff_t))
-                all_hid = normalize(self.model.return_hidden(all_xs))
-                all_hid = all_hid.reshape(3, pos_x.size(0), -1)
-                pos_hid, neg_hid_same_t, neg_hid_diff_t = all_hid[:, ~invalid_idx]
-            else:
-                all_xs  = torch.cat((pos_x, neg_x_same_t))
-                all_hid = normalize(self.model.return_hidden(all_xs))
-                all_hid = all_hid.reshape(2, pos_x.size(0), -1)
-                pos_hid, neg_hid_same_t = all_hid[:, ~invalid_idx]
+            all_xs  = torch.cat((pos_x, neg_x))
+            all_hid = normalize(self.model.return_hidden(all_xs))
+            all_hid = all_hid.reshape(2, pos_x.size(0), -1)
+            pos_hid, neg_hid = all_hid[:, ~invalid_idx]
 
             hidden = self.model.return_hidden(inc_data['x'])
             hidden_norm = normalize(hidden[~invalid_idx])
@@ -148,17 +158,9 @@ class ER_AML_Triplet(ER_AML):
                         F.triplet_margin_loss(
                                 hidden_norm,
                                 pos_hid,
-                                neg_hid_same_t,
+                                neg_hid,
                                 self.args.margin
                         )
-                if self.args.buffer_neg > 0:
-                    loss += self.args.buffer_neg * \
-                            F.triplet_margin_loss(
-                                    hidden_norm,
-                                    pos_hid,
-                                    neg_hid_diff_t,
-                                    self.args.margin
-                            )
             else:
                 loss = 0.
 

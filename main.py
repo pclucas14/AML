@@ -4,7 +4,9 @@ import argparse
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
+from collections import OrderedDict as OD
 
+from logger    import Logger
 from copy      import deepcopy
 from data.base import *
 from utils     import get_logger, get_temp_logger, logging_per_task, sho_
@@ -16,9 +18,6 @@ from methods   import *
 # Arguments
 # -----------------------------------------------------------------------------------------
 
-METHODS = ['icarl', 'er', 'mask', 'er_aml', 'er_aml_triplet', 'mir', 'iid', 'iid++', 'icarl', 'er_multihead', 'der', 'agem', 'agem_pp', 'cope', 'der', 'der_pp']
-DATASETS = ['split_cifar10', 'split_cifar100', 'miniimagenet']
-
 parser = argparse.ArgumentParser()
 
 """ optimization (fixed across all settings) """
@@ -26,7 +25,7 @@ parser.add_argument('--batch_size', type=int, default=10)
 parser.add_argument('--buffer_batch_size', type=int, default=10)
 
 # choose your weapon
-parser.add_argument('-m','--method', type=str, default='er', choices=METHODS)
+parser.add_argument('-m','--method', type=str, default='er', choices=METHODS.keys())
 
 """ data """
 parser.add_argument('--H', type=int, default=None)
@@ -42,10 +41,12 @@ parser.add_argument('--task_free', type=int, default=0)
 parser.add_argument('--use_augs', type=int, default=0)
 parser.add_argument('--samples_per_task', type=int, default=-1)
 parser.add_argument('--mem_size', type=int, default=20, help='controls buffer size')
+parser.add_argument('--validation', type=int, default=1)
+parser.add_argument('--eval_every', type=int, default=-1)
 
 """ logging """
 parser.add_argument('--exp_name', type=str, default='tmp')
-parser.add_argument('--wandb_project', type=str, default='er_imbalance')
+parser.add_argument('--wandb_project', type=str, default='online_cl')
 parser.add_argument('--wandb_log', type=str, default='off', choices=['off', 'online'])
 
 """ HParams """
@@ -72,14 +73,15 @@ parser.add_argument('--mir_head_only', type=int, default=0)
 parser.add_argument('--momentum', type=float, default=0.99)
 parser.add_argument('--cope_temperature', type=float, default=0.1)
 
-parser.add_argument('--old', action='store_true')
-
 args = parser.parse_args()
 
 if args.method in ['iid', 'iid++']:
+    raise ValueError
+
     print('overwriting args for iid setup')
     args.n_tasks = 1
     args.mem_size = 1
+
 
 # Obligatory overhead
 # -----------------------------------------------------------------------------------------
@@ -93,16 +95,8 @@ else:
 train_tf, train_loader, val_loader, test_loader  = get_data_and_tfs(args)
 train_tf.to(device)
 
-if args.wandb_log != 'off':
-    import wandb
-    wandb.init(project=args.wandb_project, name=args.exp_name, config=args)
-    wandb.config.update(args)
-else:
-    wandb = None
-
+logger = Logger(args)
 args.mem_size = args.mem_size * args.n_classes
-
-LOG = get_logger(['cls_loss', 'acc'], n_tasks=args.n_tasks)
 
 
 # Eval model
@@ -110,11 +104,15 @@ LOG = get_logger(['cls_loss', 'acc'], n_tasks=args.n_tasks)
 
 @torch.no_grad()
 def eval_agent(agent, loader, task, mode='valid'):
+    global logger
+
     agent.eval()
 
-    for task_t in range(task + 1):
-        LOG_temp = get_temp_logger(None, ['cls_loss', 'acc'])
+    accs = np.zeros(shape=(loader.sampler.n_tasks,))
 
+    for task_t in range(task + 1):
+
+        n_ok, n_total = 0, 0
         loader.sampler.set_task(task_t)
 
         # iterate over samples from task
@@ -122,18 +120,24 @@ def eval_agent(agent, loader, task, mode='valid'):
             data, target = data.to(device), target.to(device)
 
             logits = agent.predict(data)
-            pred = logits.max(1)[1]
+            pred   = logits.max(1)[1]
 
-            LOG_temp['acc'] += [pred.eq(target).float().mean().item()]
+            n_ok    += pred.eq(target).sum().item()
+            n_total += data.size(0)
 
-        logging_per_task(wandb, LOG, mode, 'acc', task, task_t,
-            np.round(np.mean(LOG_temp['acc']),2))
+        accs[task_t] = n_ok / n_total * 100
 
-    print(LOG[mode]['acc'][:task+1, :task+1])
 
-    if wandb is not None:
-        wandb.log({mode + '_anytime_acc_avg': LOG[mode]['acc'][0:task + 1, task].mean()})
-        wandb.log({mode + '_anytime_last_acc': LOG[mode]['acc'][task, task]})
+    avg_acc = np.mean(accs[:task + 1])
+    print('\n', '\t'.join([str(int(x)) for x in accs]), f'\tAvg Acc: {avg_acc:.2f}')
+
+    logger.log_scalars({
+        f'{mode}/anytime_last_acc': accs[task],
+        f'{mode}/anytime_acc_avg_seen': avg_acc,
+        f'{mode}/anytime_acc_avg_all': np.mean(accs),
+    })
+
+    return accs
 
 
 # Train the model
@@ -144,49 +148,24 @@ model = ResNet18(
         args.n_classes,
         nf=20,
         input_size=args.input_size,
-        dist_linear=args.method in ['er_aml', 'er_aml_triplet', 'mask']
+        dist_linear='ace' in args.method or 'aml' in args.method
         )
 
 model = model.to(device)
 model.train()
 
-if args.old:
-    opt = torch.optim.SGD(model.parameters(), lr=args.lr)
+agent = METHODS[args.method](model, logger, train_tf, args)
+n_params = sum(np.prod(p.size()) for p in model.parameters())
 
-# Build Method wrapper
-if args.old:
-    agent = get_method(args.method)(model, train_tf, args)
+print("number of classifier parameters:", n_params)
+
+eval_accs = []
+if args.validation:
+    mode = 'valid'
+    eval_loader = val_loader
 else:
-    # import methods
-    if args.method == 'er':
-        agent = ER
-    elif args.method == 'mask':
-        agent = ER_ACE
-    elif args.method == 'er_aml_triplet':
-        agent = ER_AML_Triplet
-    elif args.method == 'er_aml':
-        agent = ER_AML
-    elif args.method == 'mir':
-        agent = MIR
-    elif args.method == 'icarl':
-        agent = ICARL
-    elif args.method == 'agem':
-        agent = AGEM
-    elif args.method == 'agem_pp':
-        agent = AGEMpp
-    elif args.method == 'cope':
-        agent = CoPE
-    elif args.method == 'der':
-        agent = DER
-    elif args.method == 'der_pp':
-        agent = DERpp
-
-    agent = agent(model, train_tf, args)
-
-print("number of classifier parameters:",
-        sum([np.prod(p.size()) for p in model.parameters()]))
-print("buffer parameters: ", np.prod(agent.buffer.bx.size()))
-
+    mode = 'test'
+    eval_laoder = test_loader
 
 #----------
 # Task Loop
@@ -201,68 +180,41 @@ for task in range(args.n_tasks):
     #---------------
     # Minibatch Loop
 
+    print('\nTask #{} --> Train Classifier\n'.format(task))
     for i, (x,y) in enumerate(train_loader):
+        print(f'{i} / {len(train_loader)}', end='\r')
 
         if n_seen > args.samples_per_task > 0: break
 
         x = x.to(device)
         y = y.to(device)
 
-        if i==0:
-            print('\nTask #{} --> Train Classifier\n'.format(task))
-
-        #---------------
-        # Iteration Loop
         inc_data = {'x': x, 'y': y, 't': task}
 
-        for it in range(args.n_iters):
-
-            if args.old:
-                aa, bb = agent.observe(inc_data)
-
-                opt.zero_grad()
-                (aa + bb).backward()
-                opt.step()
-            else:
-                agent.observe(inc_data)
+        agent.observe(inc_data)
 
         n_seen += x.size(0)
 
-        if args.old:
-            buffer.add(inc_data)
-
-    # eval_agent(agent, val_loader, task, mode='valid')
-    eval_agent(agent, test_loader, task, mode='test')
+    # always eval at end of tasks
+    eval_accs  += [eval_agent(agent, eval_loader, task, mode=mode)]
 
 
-# final run results
+# ----- Final Results ----- #
+
+accs    = np.stack(eval_accs).T
+avg_acc = accs[:, -1].mean()
+avg_fgt = (accs.max(1) - accs[:, -1])[:-1].mean()
+
 print('\nFinal Results\n')
+logger.log_matrix(f'{mode}_acc', accs)
+logger.log_scalars({
+    f'{mode}/avg_acc': avg_acc,
+    f'{mode}/avg_fgt': avg_fgt,
+    'train/n_samples': n_seen,
+    'metrics/model_n_bits': n_params * 32,
+    'metrics/cost': agent.cost,
+    'metrics/one_sample_flop': agent.one_sample_flop,
+    'metrics/buffer_n_bits': agent.buffer.n_bits()
+})
 
-for mode in ['valid','test']:
-    final_accs = LOG[mode]['acc'][:,task]
-    logging_per_task(wandb, LOG, mode, 'final_acc', task,
-        value=np.round(np.mean(final_accs),2))
-    best_acc = np.max(LOG[mode]['acc'], 1)
-    final_forgets = best_acc - LOG[mode]['acc'][:,task]
-    logging_per_task(wandb, LOG, mode, 'final_forget', task,
-        value=np.round(np.mean(final_forgets[:-1]),2))
-
-    LOG[mode]['last_task_acc'] = np.diag(LOG[mode]['acc']).mean()
-    LOG[mode]['allbutfirst_tasks_acc'] = np.mean(LOG[mode]['acc'][:task + 1, task][:-1])
-
-    print('\n{}:'.format(mode))
-    print('final accuracy: {}'.format(final_accs))
-    print('average: {}'.format(LOG[mode]['final_acc']))
-    print('final forgetting: {}'.format(final_forgets))
-    print('average: {}\n'.format(LOG[mode]['final_forget']))
-
-    if wandb is not None:
-        for task in range(args.n_tasks):
-            wandb.log(
-		{f'{mode}_anytime_acc_avg_all': LOG[mode]['acc'][:task+1, task].mean(),
-            	 f'{mode}_last_acc_avg_all': LOG[mode]['acc'][task,task].mean(),
-		 f'{mode}final_acc_avg':final_accs.mean(),
-                 f'{mode}final_forget_avg':final_forgets.mean(),
-                 # f'{mode}final_last_task_acc':final_last_task_acc,
-                 # f'{mode}final_allbutfirst_tasks_acc':final_allbutfirst_tasks_acc
-                 })
+logger.close()

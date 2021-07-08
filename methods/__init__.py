@@ -6,3 +6,21 @@ from .icarl import ICARL
 from .agem import AGEM, AGEMpp
 from .cope import CoPE
 from .der import DER, DERpp
+
+from collections import OrderedDict
+
+METHODS = OrderedDict({
+        'icarl' :ICARL,
+        'er'    : ER,
+        'er_ace': ER_ACE,
+        'er_aml': ER_AML,
+        'er_aml_triplet': ER_AML_Triplet,
+        'mir'   : MIR,
+        #'iid'   : IID,
+        #'iid++' : IIDpp,
+        'der'   : DER,
+        'der++' : DERpp,
+        'agem'  : AGEM,
+        'agem++': AGEMpp,
+        #'cope'  : cope
+})

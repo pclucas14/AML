@@ -13,23 +13,14 @@ from utils import *
 class Buffer(nn.Module):
     def __init__(
         self,
+        device,
         capacity,
-        items_to_store={'x': (torch.FloatTensor, (3, 32, 32)),
-                        'y': (torch.LongTensor,  ()),
-                        't': (torch.LongTensor,  ())}
+        input_size,
     ):
         super().__init__()
 
-        # we need at least these two attributes
-        assert all(key in items_to_store.keys() for key in ['x', 'y'])
-
         # create placeholders for each item
         self.buffers = []
-
-        for name, (dtype, size) in items_to_store.items():
-            tmp = dtype(size=(capacity,) + size).fill_(0)
-            self.register_buffer(f'b{name}', tmp)
-            self.buffers += [f'b{name}']
 
         self.cap = capacity
         self.current_index = 0
@@ -40,20 +31,58 @@ class Buffer(nn.Module):
         self.add = self.add_reservoir
         self.sample = self.sample_random
 
-    @property
-    def device(self):
-        return getattr(self, self.buffers[0]).device
+        self.device = device
 
-    def add_buffer(self, name, dtype, size):
-        tmp = dtype(size=(self.cap,) + size).fill_(0).to(self.device)
-        self.register_buffer(f'b{name}', tmp)
-        self.buffers += [f'b{name}']
 
     def __len__(self):
         return self.current_index
 
 
+    def n_bits(self):
+        total = 0
+
+        for name in self.buffers:
+            buffer = getattr(self, name)
+
+            if buffer.dtype == torch.float32:
+                bits_per_item = 8 if name == 'bx' else 32
+            elif buffer.dtype == torch.int64:
+                bits_per_item = buffer.max().float().log2().clamp_(min=1).int().item()
+
+            total += bits_per_item * buffer.numel()
+
+        return total
+
+
+    def add_buffer(self, name, dtype, size):
+        """ used to add extra containers (e.g. for logit storage) """
+
+        tmp = torch.zeros(size=(self.cap,) + size, dtype=dtype).to(self.device)
+        self.register_buffer(f'b{name}', tmp)
+        self.buffers += [f'b{name}']
+
+
+    def _init_buffers(self, batch):
+        created = 0
+
+        for name, tensor in batch.items():
+            bname = f'b{name}'
+            if bname not in self.buffers:
+
+                if not type(tensor) == torch.Tensor:
+                    tensor = torch.from_numpy(np.array([tensor]))
+
+                self.add_buffer(name, tensor.dtype, tensor.shape[1:])
+                created += 1
+
+                print(f'created buffer {name}\t {tensor.dtype}, {tensor.shape[1:]}')
+
+        assert created in [0, len(batch)], 'not all buffers created at the same time'
+
+
     def add_reservoir(self, batch):
+        self._init_buffers(batch)
+
         n_elem = batch['x'].size(0)
 
         place_left = max(0, self.cap - self.current_index)
@@ -80,12 +109,22 @@ class Buffer(nn.Module):
             buffer = getattr(self, f'b{name}')
 
             if isinstance(data, Iterable):
-                buffer[idx_buffer] = data[idx_new_data]
+                try:
+                    idx = idx_new_data.cpu().numpy()
+                    idx_buf = idx_buffer.cpu().numpy()
+                    buf = buffer.cpu().numpy()
+                    data_ = data.cpu().numpy()
+                    buffer[idx_buffer] = data[idx_new_data]
+                except:
+                    import pdb; pdb.set_trace()
+                    xx =1
             else:
                 buffer[idx_buffer] = data
 
 
     def add_balanced(self, batch):
+        self._init_buffers(batch)
+
         n_elem = batch['x'].size(0)
 
         # increment first
@@ -222,7 +261,7 @@ class Buffer(nn.Module):
         return OrderedDict({k:v[indices] for (k,v) in subsample.items()})
 
 
-    def sample_pos_neg(self, inc_data, task_free=True):
+    def sample_pos_neg(self, inc_data, task_free=True, same_task_neg=True):
 
         x     = inc_data['x']
         label = inc_data['y']
@@ -252,20 +291,22 @@ class Buffer(nn.Module):
                 same_task = same_task | (label_exp == by.view(-1, 1))
 
         valid_pos  = same_label & ~same_ex
-        valid_neg_same_t = ~same_label & same_task & ~same_ex
-        valid_neg_diff_t = ~same_label & ~same_task & ~same_ex
+
+        if same_task_neg:
+            valid_neg = ~same_label & same_task
+        else:
+            valid_neg = ~same_label
 
         # remove points which don't have pos, neg from same and diff t
         has_valid_pos = valid_pos.sum(0) > 0
-        has_valid_neg = (valid_neg_same_t.sum(0) > 0) & (valid_neg_diff_t.sum(0) > 0)
+        has_valid_neg = valid_neg.sum(0) > 0
 
-        invalid_idx = (~has_valid_pos | ~has_valid_neg).nonzero().squeeze()
+        invalid_idx = ~has_valid_pos | ~has_valid_neg
 
-        if invalid_idx.numel() > 0:
+        if invalid_idx.sum() > 0:
             # so the fetching operation won't fail
             valid_pos[:, invalid_idx] = 1
-            valid_neg_same_t[:, invalid_idx] = 1
-            valid_neg_diff_t[:, invalid_idx] = 1
+            valid_neg[:, invalid_idx] = 1
 
         # easier if invalid_idx is a binary tensor
         is_invalid = torch.zeros_like(label).bool()
@@ -273,15 +314,17 @@ class Buffer(nn.Module):
 
         # fetch positive samples
         pos_idx = torch.multinomial(valid_pos.float().T, 1).squeeze(1)
-        neg_idx_same_t = torch.multinomial(valid_neg_same_t.float().T, 1).squeeze(1)
-        neg_idx_diff_t = torch.multinomial(valid_neg_diff_t.float().T, 1).squeeze(1)
+        neg_idx = torch.multinomial(valid_neg.float().T, 1).squeeze(1)
+
+        n_fwd = torch.stack((pos_idx, neg_idx), 1)[~invalid_idx].unique().size(0)
 
         return bx[pos_idx], \
-               bx[neg_idx_same_t], \
-               bx[neg_idx_diff_t], \
-               is_invalid, \
+               bx[neg_idx], \
                by[pos_idx], \
-               by[neg_idx_same_t], \
-               by[neg_idx_diff_t]
+               by[neg_idx], \
+               is_invalid,  \
+               n_fwd
+
+
 
 

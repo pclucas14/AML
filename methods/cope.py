@@ -10,8 +10,8 @@ from methods.er import ER
 """ This is still incomplete, need to double check a few things """
 
 class CoPE(ER):
-    def __init__(self, model, train_tf, args):
-        super().__init__(model, train_tf, args)
+    def __init__(self, model, logger, train_tf, args):
+        super().__init__(model, logger, train_tf, args)
 
         n_classes = model.linear.weight.size(0)
         self.momentum = args.momentum
@@ -70,7 +70,13 @@ class CoPE(ER):
 
         loss = -(torch.mean(torch.log(pos_sim / (pos_sim + neg_sim))))
 
-        new_loss = -(torch.mean(torch.log((pos_inc + pos_proto) / (pos_inc + pos_proto + neg_inc + neg_proto))))
+        num  = pos_inc + pos_proto
+        deno = pos_inc + pos_proto + neg_inc + neg_proto
+
+        new_loss = - (num / deno).log().mean()
+
+        self.n_fwd += data['x'].size(0)
+        self.n_bwd += data['x'].size(0)
 
         return new_loss, hidden.detach(), data['y']
 

@@ -24,7 +24,9 @@ class CIFAR:
         tfs = transforms.Compose([
             transforms.Resize(H),
             transforms.ToTensor(),
-            lambda x : (x - .5) * 2.
+            transforms.Normalize((0.4914, 0.4822, 0.4465),
+                                 (0.2470, 0.2435, 0.2615))
+            #lambda x : (x - .5) * 2.
         ])
 
         return tfs
@@ -36,7 +38,7 @@ class CIFAR:
 
         if use_augs:
             tfs = nn.Sequential(
-                kornia.augmentation.RandomCrop(size=[H, H], padding=4),
+                kornia.augmentation.RandomCrop(size=(H, H), padding=4),
                 kornia.augmentation.RandomHorizontalFlip(),
             )
         else:

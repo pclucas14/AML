@@ -12,6 +12,9 @@ from torchvision import datasets, transforms
 """ Datasets """
 class MiniImagenet(datasets.ImageFolder):
 
+    default_size = 84
+    default_n_tasks = 20
+
     def __init__(self, root, train=True, transform=None, download=False):
 
         if download:
@@ -35,23 +38,16 @@ class MiniImagenet(datasets.ImageFolder):
 
         self.data = np.array([x[0] for x in self.samples])
 
-    @property
-    def default_size(self):
-        return 84
 
-    @property
-    def default_n_tasks(self):
-        return 20
-
-
-    def base_transforms(self, H=None):
+    def base_transforms(H=None):
         """ base transformations applied to *train* images """
 
         if H is None:
-            H = self.default_size
+            H = MiniImagenet.default_size
 
         tfs = transforms.Compose([
-               transforms.Resize(H * 1.15),
+               transforms.Resize(int(H * 1.25)),
+               transforms.CenterCrop(int(H * 1.15)),
                transforms.ToTensor(),
                lambda x : (x - .5) * .5
         ])
@@ -59,35 +55,37 @@ class MiniImagenet(datasets.ImageFolder):
         return tfs
 
 
-    def train_transforms(self, H=None, use_augs=False):
+    def train_transforms(H=None, use_augs=False):
         """ extra augs applied over *training* images """
 
         if H is None:
-            H = self.default_size
+            H = MiniImagenet.default_size
 
         if use_augs:
-            tfs = nn.Sequential(
-                kornia.augmentation.RandomCrop(size=[H, H]),
+            tfs = torch.nn.Sequential(
+                kornia.augmentation.RandomCrop(size=(H, H)),
                 kornia.augmentation.RandomHorizontalFlip(),
             )
         else:
-            tfs = kornia.augmentation.CenterCrop(size=[H, H])
+            tfs = kornia.augmentation.CenterCrop(size=(H, H))
 
         return tfs
 
 
-    def eval_transforms(self, H):
+    def eval_transforms(H):
         """ base transformations applied during evaluation """
 
         if H is None:
-            H = self.default_size
+            H = MiniImagenet.default_size
 
         tfs = transforms.Compose([
-               transforms.Resize(H * 1.15),
+               transforms.Resize(int(H * 1.15)),
                transforms.CenterCrop(H),
                transforms.ToTensor(),
                lambda x : (x - .5) * .5
         ])
+
+        return tfs
 
 
 # --- Utilities to download the dataset from google drive --- #

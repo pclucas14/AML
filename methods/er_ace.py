@@ -36,6 +36,7 @@ class ER_ACE(ER):
         # unmask unseen classes
         mask[:, self.seen_so_far.max():] = 1
 
+        # if self.task_free or inc_data['t'] > 0:
         if inc_data['t'] > 0:
             logits  = logits.masked_fill(mask == 0, -1e9)
 

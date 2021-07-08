@@ -8,8 +8,8 @@ from methods.er import ER
 from utils import *
 
 class AGEM(ER):
-    def __init__(self, model, train_tf, args):
-        super().__init__(model, train_tf, args)
+    def __init__(self, model, logger, train_tf, args):
+        super().__init__(model, logger, train_tf, args)
 
         self.grad_dims = []
         for param in model.parameters():
@@ -18,9 +18,33 @@ class AGEM(ER):
         self.grad_inc = torch.zeros(np.sum(self.grad_dims)).to(self.device)
         self.grad_re  = torch.zeros(np.sum(self.grad_dims)).to(self.device)
 
-
     def overwrite_grad(self, projected_grad):
         overwrite_grad(self.model.parameters, projected_grad, self.grad_dims)
+
+
+    def process_re(re_data):
+        # store grad
+        store_grad(self.model.parameters, self.grad_inc, self.grad_dims)
+
+        # clear grad buffers
+        self.model.zero_grad()
+
+        # rehearsal grad
+        re_loss = self.process_re(re_data)
+        re_loss.backward()
+        store_grad(self.model.parameters, self.grad_re, self.grad_dims)
+
+        # potentially project incoming gradient
+        dot_p = torch.dot(self.grad_inc, self.grad_re)
+        if dot_p < 0.:
+            proj_grad = project(gxy=self.grad_inc, ger=self.grad_re)
+        else:
+            proj_grad = self.grad_inc
+
+        self.overwrite_grad(proj_grad)
+
+        return re_loss
+
 
 
     def observe(self, inc_data):
@@ -43,26 +67,7 @@ class AGEM(ER):
                 re_data = self.buffer.sample(
                         **self.sample_kwargs
                 )
-
-                # store grad
-                store_grad(self.model.parameters, self.grad_inc, self.grad_dims)
-
-                # clear grad buffers
-                self.model.zero_grad()
-
-                # rehearsal grad
-                re_loss = self.process_re(re_data)
-                re_loss.backward()
-                store_grad(self.model.parameters, self.grad_re, self.grad_dims)
-
-                # potentially project incoming gradient
-                dot_p = torch.dot(self.grad_inc, self.grad_re)
-                if dot_p < 0.:
-                    proj_grad = project(gxy=self.grad_inc, ger=self.grad_re)
-                else:
-                    proj_grad = self.grad_inc
-
-                self.overwrite_grad(proj_grad)
+                re_loss = self.process(re_data)
 
         self.opt.step()
 

@@ -8,8 +8,8 @@ from copy import deepcopy
 from methods.er import ER
 
 class ICARL(ER):
-    def __init__(self, model, train_tf, args):
-        super(ICARL, self).__init__(model, train_tf, args)
+    def __init__(self, model, logger, train_tf, args):
+        super(ICARL, self).__init__(model, logger, train_tf, args)
 
         assert not args.task_free or args.distill_coef == 0.
 
@@ -90,6 +90,7 @@ class ICARL(ER):
             loss += self.D_C * self.bce_sum(self.logits.view(-1), tgt.view(-1)) / inc_data['x'].size(0)
 
         return loss
+
 
     def observe(self, inc_data):
         if inc_data['t'] != self.task:
