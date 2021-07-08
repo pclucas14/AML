@@ -9,7 +9,6 @@ from collections import OrderedDict as OD
 from logger    import Logger
 from copy      import deepcopy
 from data.base import *
-from utils     import get_logger, get_temp_logger, logging_per_task, sho_
 from copy      import deepcopy
 from pydoc     import locate
 from model     import ResNet18, normalize
