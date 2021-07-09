@@ -109,15 +109,11 @@ class Buffer(nn.Module):
             buffer = getattr(self, f'b{name}')
 
             if isinstance(data, Iterable):
-                try:
-                    idx = idx_new_data.cpu().numpy()
-                    idx_buf = idx_buffer.cpu().numpy()
-                    buf = buffer.cpu().numpy()
-                    data_ = data.cpu().numpy()
-                    buffer[idx_buffer] = data[idx_new_data]
-                except:
-                    import pdb; pdb.set_trace()
-                    xx =1
+                idx = idx_new_data.cpu().numpy()
+                idx_buf = idx_buffer.cpu().numpy()
+                buf = buffer.cpu().numpy()
+                data_ = data.cpu().numpy()
+                buffer[idx_buffer] = data[idx_new_data]
             else:
                 buffer[idx_buffer] = data
 

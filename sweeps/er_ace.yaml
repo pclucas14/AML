@@ -1,0 +1,42 @@
+name: 'er_ace_sweep'
+project: 'cl_sweeps'
+method: grid
+metric:
+  goal: maximize
+  name: valid/avg_acc
+program: main.py
+
+parameters:
+  lr: 
+    values:
+    - 0.1
+    - 0.05 
+    - 0.01
+  use_augs: 
+    values: 
+    - 0
+    - 1
+  mem_size: 
+    values: 
+    - 20
+    - 50 
+    - 100
+  dataset: 
+    values: 
+    - split_cifar10
+    - split_cifar100
+    - miniimagenet
+  run: 
+    values: 
+    - 0 
+    - 1
+
+  # defaults
+  method:
+    value: er_ace
+  wandb_log:
+    value: online
+  task_free: 
+    value: 1
+  validation: 
+    value: 1

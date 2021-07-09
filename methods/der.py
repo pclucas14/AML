@@ -13,6 +13,10 @@ class DER(ER):
 
         assert args.use_augs, 'must be used with augmentations'
 
+    @property
+    def name(self):
+        args = self.args
+        return f'DER_{args.dataset}_M{args.mem_size}_Augs{args.use_augs}_TF{args.task_free}_A{args.alpha}'
 
     def process_inc(self, inc_data):
 
@@ -46,6 +50,11 @@ class DERpp(DER):
 
         # double the buffer batch size to perform the two ops
         self.sample_kwargs['amt'] = args.buffer_batch_size * 2
+
+    @property
+    def name(self):
+        args = self.args
+        return f'DER++_DS{args.dataset[-10:]}_M{args.mem_size}_Augs{args.use_augs}_TF{args.task_free}_A{args.alpha}_B{args.beta}'
 
 
     @property

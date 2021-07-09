@@ -27,6 +27,10 @@ class CoPE(ER):
         #self.buffer.add    = self.buffer.add_balanced
         self.seen_so_far = torch.LongTensor(size=(0,)).to(self.device)
 
+    @property
+    def name(self):
+        args = self.args
+        return f'CoPE_{args.dataset}_M{args.mem_size}_Augs{args.use_augs}_TF{args.task_free}'
 
     @property
     def prototypes(self):

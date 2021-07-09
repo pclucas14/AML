@@ -19,6 +19,11 @@ class ER_ACE(ER):
             self.args.task_free = True
             self.sample_kwargs['exclude_task'] = None
 
+    @property
+    def name(self):
+        args = self.args
+        return f'ER-ACE_{args.dataset}_M{args.mem_size}_Augs{args.use_augs}'
+
 
     def process_inc(self, inc_data):
         """ get loss from incoming data """
@@ -36,8 +41,7 @@ class ER_ACE(ER):
         # unmask unseen classes
         mask[:, self.seen_so_far.max():] = 1
 
-        # if self.task_free or inc_data['t'] > 0:
-        if inc_data['t'] > 0:
+        if inc_data['t'] > 0 or self.args.task_free:
             logits  = logits.masked_fill(mask == 0, -1e9)
 
         loss = self.loss(logits, inc_data['y'])

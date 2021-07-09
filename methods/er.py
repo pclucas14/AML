@@ -19,6 +19,10 @@ class ER(Method):
             'exclude_task': None if args.task_free else self.task,
         }
 
+    @property
+    def name(self):
+        args = self.args
+        return f'ER_DS{args.dataset[-10:]}_M{args.mem_size}_Augs{args.use_augs}_TF{args.task_free}'
 
     @property
     def cost(self):

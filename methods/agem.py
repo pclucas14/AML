@@ -18,6 +18,12 @@ class AGEM(ER):
         self.grad_inc = torch.zeros(np.sum(self.grad_dims)).to(self.device)
         self.grad_re  = torch.zeros(np.sum(self.grad_dims)).to(self.device)
 
+    @property
+    def name(self):
+        args = self.args
+        return f'AGEM_{args.dataset}_M{args.mem_size}_Augs{args.use_augs}_TF{args.task_free}'
+
+
     def overwrite_grad(self, projected_grad):
         overwrite_grad(self.model.parameters, projected_grad, self.grad_dims)
 

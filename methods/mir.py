@@ -22,6 +22,11 @@ class MIR(ER):
         })
 
     @property
+    def name(self):
+        args = self.args
+        return f'MIR_HO{args.mir_head_only}_{args.dataset}_M{args.mem_size}_Augs{args.use_augs}_TF{args.task_free}'
+
+    @property
     def cost(self):
         bs, bbs = self.args.batch_size, self.args.buffer_batch_size
 

@@ -24,6 +24,12 @@ class Method():
 
         self.n_fwd, self.n_bwd = 0, 0
 
+        self.logger.register_name(self.name)
+
+    @property
+    def name(self):
+        return ''
+
     @property
     def cost(self):
         """ return the number of passes (fwd + bwd = 2) through the model for training on one sample """

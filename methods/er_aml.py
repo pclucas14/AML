@@ -20,6 +20,12 @@ class ER_AML(ER):
 
 
     @property
+    def name(self):
+        args = self.args
+        return f'ER-AML_{args.dataset}_M{args.mem_size}_Augs{args.use_augs}_TF{args.task_free}'
+
+
+    @property
     def cost(self):
         return 2 * (self.n_fwd_inc / self.n_fwd_inc_cnt + self.args.buffer_batch_size) / self.args.batch_size
 
@@ -131,6 +137,11 @@ class ER_AML(ER):
 
 
 class ER_AML_Triplet(ER_AML):
+
+    @property
+    def name(self):
+        args = self.args
+        return f'ER-AML-Triplet_{args.dataset}_M{args.mem_size}_Augs{args.use_augs}_TF{args.task_free}'
 
     def process_inc(self, inc_data):
         """ get loss from incoming data """

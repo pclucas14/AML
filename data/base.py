@@ -59,7 +59,7 @@ class ContinualSampler(torch.utils.data.Sampler):
         self.task = task
 
 
-def make_val_from_train(dataset, split=.95):
+def make_val_from_train(dataset, split=.9):
     train_ds, val_ds = deepcopy(dataset), deepcopy(dataset)
 
     train_idx, val_idx = [], []

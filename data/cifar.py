@@ -14,7 +14,6 @@ from torchvision import datasets, transforms
 class CIFAR:
 
     default_size = 32
-    default_n_tasks = 5
 
     def base_transforms(H=None):
 
@@ -24,9 +23,9 @@ class CIFAR:
         tfs = transforms.Compose([
             transforms.Resize(H),
             transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465),
-                                 (0.2470, 0.2435, 0.2615))
-            #lambda x : (x - .5) * 2.
+            #transforms.Normalize((0.4914, 0.4822, 0.4465),
+            #                     (0.2470, 0.2435, 0.2615))
+            lambda x : (x - .5) * 2.
         ])
 
         return tfs
@@ -38,7 +37,7 @@ class CIFAR:
 
         if use_augs:
             tfs = nn.Sequential(
-                kornia.augmentation.RandomCrop(size=(H, H), padding=4),
+                kornia.augmentation.RandomCrop(size=(H, H), padding=4, fill=-1), #.98),
                 kornia.augmentation.RandomHorizontalFlip(),
             )
         else:
@@ -52,7 +51,7 @@ class CIFAR:
 
 
 class CIFAR10(CIFAR, datasets.CIFAR10):
-    pass
+    default_n_tasks = 5
 
 class CIFAR100(CIFAR, datasets.CIFAR100):
-    pass
+    default_n_tasks = 20

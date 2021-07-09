@@ -22,6 +22,11 @@ class ICARL(ER):
 
         self.bce_sum = nn.BCEWithLogitsLoss(reduction='sum')
 
+    @property
+    def name(self):
+        args = self.args
+        return f'ICARL_{args.dataset}_M{args.mem_size}_Augs{args.use_augs}_TF{args.task_free}_DC{args.distill_coef}'
+
     def _on_task_switch(self):
         self.task += 1
 

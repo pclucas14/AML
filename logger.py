@@ -1,6 +1,7 @@
 import os
 import sys
 import pickle
+import numpy as np
 
 from datetime import datetime
 
@@ -20,7 +21,7 @@ class Logger:
 
         # create directory to store real logs
         date, time = datetime.now().strftime("%d_%m_%Y %H_%M_%S").split(' ')
-        self.path  = os.path.join(base_dir, date, time)
+        self.path  = os.path.join(base_dir, date, time + f'_{np.random.randint(1000)}')
         os.makedirs(self.path)
 
         # dump args
@@ -30,6 +31,12 @@ class Logger:
 
         self.to_pickle  = []
         self.picklename = os.path.join(self.path,  "db.pickle")
+
+
+    def register_name(self, name):
+        if self.wandb is not None:
+            self.wandb.config.update({'unique_name': name})
+
 
 
     def log_scalars(self, values):

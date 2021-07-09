@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from collections import OrderedDict as OD
 
+from utils     import sho_
 from logger    import Logger
 from copy      import deepcopy
 from data.base import *
@@ -42,6 +43,7 @@ parser.add_argument('--samples_per_task', type=int, default=-1)
 parser.add_argument('--mem_size', type=int, default=20, help='controls buffer size')
 parser.add_argument('--validation', type=int, default=1)
 parser.add_argument('--eval_every', type=int, default=-1)
+parser.add_argument('--run', type=int, default=0)
 
 """ logging """
 parser.add_argument('--exp_name', type=str, default='tmp')
@@ -164,7 +166,7 @@ if args.validation:
     eval_loader = val_loader
 else:
     mode = 'test'
-    eval_laoder = test_loader
+    eval_loader = test_loader
 
 #----------
 # Task Loop
