@@ -77,11 +77,9 @@ parser.add_argument('--cope_temperature', type=float, default=0.1)
 args = parser.parse_args()
 
 if args.method in ['iid', 'iid++']:
-    raise ValueError
-
     print('overwriting args for iid setup')
     args.n_tasks = 1
-    args.mem_size = 1
+    args.mem_size = 0
 
 
 # Obligatory overhead
@@ -98,6 +96,33 @@ train_tf.to(device)
 
 logger = Logger(args)
 args.mem_size = args.mem_size * args.n_classes
+
+# for iid methods
+args.train_loader = train_loader
+
+# CLASSIFIER
+model = ResNet18(
+        args.n_classes,
+        nf=20,
+        input_size=args.input_size,
+        dist_linear='ace' in args.method or 'aml' in args.method
+        )
+
+model = model.to(device)
+model.train()
+
+agent = METHODS[args.method](model, logger, train_tf, args)
+n_params = sum(np.prod(p.size()) for p in model.parameters())
+
+print("number of classifier parameters:", n_params)
+
+eval_accs = []
+if args.validation:
+    mode = 'valid'
+    eval_loader = val_loader
+else:
+    mode = 'test'
+    eval_loader = test_loader
 
 
 # Eval model
@@ -143,30 +168,6 @@ def eval_agent(agent, loader, task, mode='valid'):
 
 # Train the model
 # -----------------------------------------------------------------------------------------
-
-# CLASSIFIER
-model = ResNet18(
-        args.n_classes,
-        nf=20,
-        input_size=args.input_size,
-        dist_linear='ace' in args.method or 'aml' in args.method
-        )
-
-model = model.to(device)
-model.train()
-
-agent = METHODS[args.method](model, logger, train_tf, args)
-n_params = sum(np.prod(p.size()) for p in model.parameters())
-
-print("number of classifier parameters:", n_params)
-
-eval_accs = []
-if args.validation:
-    mode = 'valid'
-    eval_loader = val_loader
-else:
-    mode = 'test'
-    eval_loader = test_loader
 
 #----------
 # Task Loop

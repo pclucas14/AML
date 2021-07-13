@@ -6,6 +6,7 @@ from .icarl import ICARL
 from .agem import AGEM, AGEMpp
 from .cope import CoPE
 from .der import DER, DERpp
+from .iid import IID, IIDpp
 
 from collections import OrderedDict
 
@@ -16,8 +17,8 @@ METHODS = OrderedDict({
         'er_aml': ER_AML,
         'er_aml_triplet': ER_AML_Triplet,
         'mir'   : MIR,
-        #'iid'   : IID,
-        #'iid++' : IIDpp,
+        'iid'   : IID,
+        'iid++' : IIDpp,
         'der'   : DER,
         'der++' : DERpp,
         'agem'  : AGEM,
