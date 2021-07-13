@@ -16,7 +16,6 @@ class ICARL(ER):
         self.D_C = args.distill_coef
         self.distill = args.distill_coef > 0
 
-        self.task = 0
         self._centroids = None
         self._old_model = None
 
@@ -27,9 +26,15 @@ class ICARL(ER):
         args = self.args
         return f'ICARL_{args.dataset}_M{args.mem_size}_Augs{args.use_augs}_TF{args.task_free}_DC{args.distill_coef}'
 
-    def _on_task_switch(self):
-        self.task += 1
+    @property
+    def cost(self):
+        cost = 2 * (self.args.batch_size + self.args.buffer_batch_size) / self.args.batch_size
+        if self.D_C > 0:
+            cost += (self.args.batch_size) / self.args.batch_size
 
+        return cost
+
+    def _on_task_switch(self):
         if self.distill:
             self._old_model = deepcopy(self.model)
             self._old_model.eval()

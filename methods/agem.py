@@ -28,7 +28,7 @@ class AGEM(ER):
         overwrite_grad(self.model.parameters, projected_grad, self.grad_dims)
 
 
-    def process_re(re_data):
+    def process_re(self, re_data):
         # store grad
         store_grad(self.model.parameters, self.grad_inc, self.grad_dims)
 
@@ -36,7 +36,7 @@ class AGEM(ER):
         self.model.zero_grad()
 
         # rehearsal grad
-        re_loss = self.process_re(re_data)
+        re_loss = self._process(re_data)
         re_loss.backward()
         store_grad(self.model.parameters, self.grad_re, self.grad_dims)
 
@@ -73,7 +73,7 @@ class AGEM(ER):
                 re_data = self.buffer.sample(
                         **self.sample_kwargs
                 )
-                re_loss = self.process(re_data)
+                re_loss = self.process_re(re_data)
 
         self.opt.step()
 
