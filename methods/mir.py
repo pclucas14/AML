@@ -31,7 +31,7 @@ class MIR(ER):
         bs, bbs = self.args.batch_size, self.args.buffer_batch_size
 
         # this is the cost of the processing of incoming and rehearsal data
-        base_cost = 2 * (bs + bbs) / bs
+        base_cost = 3 * (bs + bbs) / bs
 
         # we must also consider the cost of fetching the buffer data
         if self.args.mir_head_only:

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.profiler import profile, record_function, ProfilerActivity
 
 import numpy as np
 
@@ -26,13 +27,18 @@ class ER(Method):
 
     @property
     def cost(self):
-        return 2 * (self.args.batch_size + self.args.buffer_batch_size) / self.args.batch_size
+        return 3 * (self.args.batch_size + self.args.buffer_batch_size) / self.args.batch_size
 
 
     def _process(self, data):
         """ get a loss signal from data """
 
         aug_data = self.train_tf(data['x'])
+
+        if torch.isinf(aug_data).any():
+            import pdb; pdb.set_trace()
+            xx = 1
+
         pred     = self.model(aug_data)
         loss     = self.loss(pred, data['y'])
         return loss

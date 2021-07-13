@@ -27,7 +27,7 @@ class ER_AML(ER):
 
     @property
     def cost(self):
-        return 2 * (self.n_fwd_inc / self.n_fwd_inc_cnt + self.args.buffer_batch_size) / self.args.batch_size
+        return 3 * (self.n_fwd_inc / self.n_fwd_inc_cnt + self.args.buffer_batch_size) / self.args.batch_size
 
 
     def sup_con_loss(self, anchor_feature, features, anch_labels=None, labels=None,

@@ -59,7 +59,7 @@ class DERpp(DER):
 
     @property
     def cost(self):
-        return 2 * (self.args.batch_size + 2 * self.args.buffer_batch_size) / self.args.batch_size
+        return 3 * (self.args.batch_size + 2 * self.args.buffer_batch_size) / self.args.batch_size
 
 
     def process_re(self, re_data):

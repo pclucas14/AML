@@ -19,11 +19,11 @@ class IID(Method):
     @property
     def name(self):
         args = self.args
-        return f'IID_{args.dataset[-10:]}_M{args.mem_size}_Augs{args.use_augs}_TF{args.task_free}'
+        return f'IID_{args.dataset[-10:]}_Augs{args.use_augs}'
 
     @property
     def cost(self):
-        return 2 * (self.args.batch_size) / self.args.batch_size
+        return 3 * (self.args.batch_size) / self.args.batch_size
 
     def _process(self, data):
         """ get a loss signal from data """
@@ -43,10 +43,14 @@ class IID(Method):
 
 
 class IIDpp(IID):
+    @property
+    def name(self):
+        args = self.args
+        return f'IID++_{args.dataset[-10:]}_Augs{args.use_augs}'
 
     @property
     def cost(self):
-        return 2 * (self.args.batch_size + self.args.buffer_batch_size) / self.args.batch_size
+        return 3 * (self.args.batch_size + self.args.buffer_batch_size) / self.args.batch_size
 
 
     def observe(self, inc_data):

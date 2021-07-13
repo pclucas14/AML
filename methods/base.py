@@ -47,7 +47,8 @@ class Method():
     def one_sample_flop(self):
         if not hasattr(self, '_train_cost'):
             input = torch.FloatTensor(size=(1,) + self.args.input_size).to(self.device)
-            self._train_cost = FCA(self.model, input).total() / 1e6 # MegaFlops
+            flops = FCA(self.model, input)
+            self._train_cost = flops.total() / 1e6 # MegaFlops
 
         return self._train_cost
 

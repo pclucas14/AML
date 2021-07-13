@@ -28,9 +28,9 @@ class ICARL(ER):
 
     @property
     def cost(self):
-        cost = 2 * (self.args.batch_size + self.args.buffer_batch_size) / self.args.batch_size
+        cost = 3 * (self.args.batch_size + self.args.buffer_batch_size) / self.args.batch_size
         if self.D_C > 0:
-            cost += (self.args.batch_size) / self.args.batch_size
+            cost += 1 * (self.args.batch_size) / self.args.batch_size
 
         return cost
 
