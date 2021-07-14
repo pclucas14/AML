@@ -1,16 +1,16 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.profiler import profile, record_function, ProfilerActivity
 
 import copy
 import numpy as np
 
 from buffer import Buffer
-from methods.er import ER
+from methods.er_aml import ER_AML
+from model import normalize
 from utils import *
 
-class MoCo(ER):
+class MoCo(ER_AML):
     def __init__(self, model, logger, train_tf, args):
         super(MoCo, self).__init__(model, logger, train_tf, args)
         self.M = args.momentum
@@ -29,7 +29,7 @@ class MoCo(ER):
 
     @property
     def cost(self):
-        return 3 * (self.args.batch_size + self.args.buffer_batch_size) / self.args.batch_size
+        return 3 * (self.args.batch_size + self.args.buffer_batch_size) / self.args.batch_size + self.args.batch_size
 
 
     def ema_update(self):
@@ -52,6 +52,62 @@ class MoCo(ER):
 
         pred     = self.model.linear(model_hid)
         loss     = self.loss(pred, data['y'])
+
+        return loss
+
+
+    def process_inc(self, inc_data):
+        """ get loss from incoming data """
+
+        n_fwd = 0
+
+        with torch.no_grad():
+            ema_hid   = self.ema_model.return_hidden(inc_data['x'])
+            self.queue.add({'x': ema_hid.detach(), 'y': inc_data['y']})
+
+        if inc_data['t'] > 0 or (self.args.task_free and len(self.buffer) > 0):
+            # do fancy pos neg
+            pos_x, neg_x, pos_y, neg_y, invalid_idx, n_fwd = \
+                    self.buffer.sample_pos_neg(
+                        inc_data,
+                        task_free=self.args.task_free,
+                        same_task_neg=True
+                    )
+
+            # normalized hidden incoming
+            hidden  = self.model.return_hidden(inc_data['x'])
+            hidden_norm = normalize(hidden[~invalid_idx])
+
+            all_xs  = torch.cat((pos_x, neg_x))
+            all_hid = normalize(self.model.return_hidden(all_xs))
+            all_hid = all_hid.reshape(2, pos_x.size(0), -1)
+            pos_hid, neg_hid = all_hid[:, ~invalid_idx]
+
+            if (~invalid_idx).any():
+
+                inc_y = inc_data['y'][~invalid_idx]
+                pos_y = pos_y[~invalid_idx]
+                neg_y = neg_y[~invalid_idx]
+                hid_all = torch.cat((pos_hid, neg_hid), dim=0)
+                y_all   = torch.cat((pos_y, neg_y), dim=0)
+
+                loss = self.sup_con_loss(
+                        labels=y_all,
+                        features=hid_all.unsqueeze(1),
+                        anch_labels=inc_y.repeat(2),
+                        anchor_feature=hidden_norm.repeat(2, 1),
+                        temperature=self.args.supcon_temperature,
+                )
+
+            else:
+                loss = 0.
+
+        else:
+            # do regular training at the start
+            loss = self.loss(self.model(inc_data['x']), inc_data['y'])
+
+        self.n_fwd_inc += (n_fwd + inc_data['x'].size(0))
+        self.n_fwd_inc_cnt += 1
 
         return loss
 

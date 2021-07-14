@@ -172,6 +172,20 @@ class Buffer(nn.Module):
             setattr(self, f'b{name}', buffer)
 
 
+    def add_queue(self, batch):
+        self._init_buffers(batch)
+
+        if not hasattr(self, 'queue_ptr'):
+            self.queue_ptr = 0
+
+        start_idx = self.queue_ptr
+        end_idx   = (start_idx + batch['x'].size(0)) % self.cap
+
+        for name, data in batch.items():
+            buffer = getattr(self, f'b{name}')
+            buffer[start_idx:end_idx] = data
+
+
     def sample_random(self, amt, exclude_task=None, **kwargs):
         buffers = OrderedDict()
 
