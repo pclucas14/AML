@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.profiler import profile, record_function, ProfilerActivity
 
 import numpy as np
 

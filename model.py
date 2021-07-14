@@ -67,7 +67,7 @@ class BasicBlock(nn.Module):
         out = self.activation(self.bn1(self.conv1(x)))
         # out = self.activation(self.nin(self.bn1(self.conv1(x))))
         out = self.bn2(self.conv2(out))
-        out += self.shortcut(x)
+        out = out + self.shortcut(x)
         out = self.activation(out)
         # out = self.activation(self.nin(out))
         return out
