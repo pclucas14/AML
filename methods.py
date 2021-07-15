@@ -16,10 +16,11 @@ import copy
 
 # Abstract Class
 class Method():
-    def __init__(self, model, buffer, args):
+    def __init__(self, model, buffer, args, model_slow=None):
         self.args   = args
         self.model  = model
         self.buffer = buffer
+        self.model_slow = model_slow
 
     def observe(self, inc_x, inc_y, inc_t, inc_idx, rehearse=False):
         pass
@@ -35,8 +36,8 @@ class Method():
 
 
 class ER(Method):
-    def __init__(self, model, buffer, args):
-        super(ER, self).__init__(model, buffer, args)
+    def __init__(self, model, buffer, args, model_slow=None):
+        super(ER, self).__init__(model, buffer, args, model_slow=model_slow)
 
     def observe(self, inc_x, inc_y, inc_t, inc_idx, rehearse=False):
         args = self.args
@@ -46,12 +47,13 @@ class ER(Method):
         present = inc_y.unique()
 
         if rehearse:
+
             # sample from buffer
             mem_x, mem_y, bt = self.buffer.sample(
                     args.buffer_batch_size,
                     aug=args.use_augmentations,
-                    exclude_task=None if args.task_free else inc_t,
-                    exclude_labels=present if args.task_free else None
+                    exclude_task= None if args.task_free else inc_t,
+                    exclude_labels= present if args.task_free else None
             )
 
             loss_re = F.cross_entropy(self.model(mem_x), mem_y)
@@ -144,8 +146,8 @@ class ER_Multihead(Method):
         '''
 
 class ER_ACE(ER):
-    def __init__(self, model, buffer, args):
-        super(ER_ACE, self).__init__(model, buffer, args)
+    def __init__(self, model, buffer, args, model_slow = None):
+        super(ER_ACE, self).__init__(model, buffer, args, model_slow = model_slow)
 
         self.seen_so_far = torch.LongTensor(size=(0,)).to(buffer.bx.device)
         self.task = -1
@@ -185,6 +187,180 @@ class ER_ACE(ER):
         return loss, loss_re
 
 
+
+class ER_AML(Method):
+
+    def observe(self, inc_x, inc_y, inc_t, inc_idx, rehearse=False):
+        args = self.args
+
+        if inc_t == 0:
+            loss = F.cross_entropy(self.model(inc_x), inc_y)
+        else:
+            hidden  = self.model.return_hidden(inc_x)
+
+            # fetch contrastive pairs
+            pos_x, neg_x_same_t, neg_x_diff_t, invalid_idx = \
+                    self.buffer.fetch_pos_neg_samples(
+                            inc_y,
+                            inc_t,
+                            inc_idx,
+                            data=inc_x,
+                            task_free=args.task_free)
+
+            if args.buffer_neg > 0:
+                all_xs  = torch.cat((pos_x, neg_x_same_t, neg_x_diff_t))
+                all_hid = normalize(self.model.return_hidden(all_xs))
+                all_hid = all_hid.reshape(3, pos_x.size(0), -1)
+                pos_hid, neg_hid_same_t, neg_hid_diff_t = all_hid[:, ~invalid_idx]
+            else:
+                all_xs  = torch.cat((pos_x, neg_x_same_t))
+                all_hid = normalize(self.model.return_hidden(all_xs))
+                all_hid = all_hid.reshape(2, pos_x.size(0), -1)
+                pos_hid, neg_hid_same_t= all_hid[:, ~invalid_idx]
+
+            hidden_norm = normalize(hidden[~invalid_idx])
+
+            if (~invalid_idx).any():
+                loss = args.incoming_neg * \
+                        F.triplet_margin_loss(
+                                hidden_norm,
+                                pos_hid,
+                                neg_hid_same_t,
+                                args.margin
+                        )
+                if args.buffer_neg > 0:
+                    loss += args.buffer_neg * \
+                            F.triplet_margin_loss(
+                                    hidden_norm,
+                                    pos_hid,
+                                    neg_hid_diff_t,
+                                    args.margin
+                            )
+            else:
+                loss = 0.
+
+        loss_re = 0.
+        if rehearse:
+            # sample from buffer
+            mem_x, mem_y, bt = self.buffer.sample(
+                    args.buffer_batch_size,
+                    aug=args.use_augmentations,
+                    exclude_task=None,
+                    exclude_labels=None
+            )
+
+            loss_re = F.cross_entropy(self.model(mem_x), mem_y)
+
+        return loss, loss_re
+
+
+class ER_BYOL(Method):
+    def predict(self, x,sz=160):
+       all_y = self.buffer.y.nonzero(as_tuple=True)[1]
+       unique_y = all_y.unique()
+       centroids = torch.zeros_like(self.model.linear.L.weight.data)
+       
+       for y in unique_y:
+           centroids[y] = self.model.return_hidden(self.buffer.x[(all_y==y).nonzero().squeeze()]).mean(dim=0)
+
+       return torch.matmul(normalize(self.model_slow.return_hidden(x)),normalize(centroids.transpose(1,0)))
+
+    def observe(self, inc_x, inc_y, inc_t, inc_idx, rehearse=False):
+        self.model.scale_factors = 5.0
+        args = self.args
+
+        if inc_t == 0:
+            loss = F.cross_entropy(self.model(inc_x), inc_y)
+        else:
+
+            # fetch contrastive pairs
+            pos_x, neg_x_same_t, neg_x_diff_t, invalid_idx = \
+                    self.buffer.fetch_pos_neg_samples(
+                            inc_y,
+                            inc_t,
+                            inc_idx,
+                            data=inc_x,
+                            task_free=args.task_free)
+
+
+            #all_xs  = torch.cat((pos_x, neg_x_same_t))
+            #all_hid = normalize(self.model.return_hidden(all_xs))
+
+            # all_xs = all_xs.reshape(2, pos_x.size(0), -1)
+           # pos_x, neg_x= all_xs[:, ~invalid_idx]
+
+
+
+            #import ipdb; ipdb.set_trace()
+            if (~invalid_idx).float().sum().item()>1:
+                hid1 = self.model.return_hidden(inc_x[~invalid_idx])
+                hid2 = self.model.return_hidden(pos_x[~invalid_idx])
+                pred_1 = self.model.projection(hid1)
+                pred_2 = self.model.projection(hid2)
+
+                with torch.no_grad():
+                    target_1 = self.model_slow.return_hidden(pos_x[~invalid_idx])
+                    target_2 = self.model_slow.return_hidden(inc_x[~invalid_idx])
+
+                # pos_hid_net1 = self.model.return_hidden(pos_x)
+                # pos_hid_net2 = self.model_slow.return_hidden(pos_x)
+
+                # hidden_norm = normalize(hidden[~invalid_idx])
+
+                loss1 = 2 - 2 * (normalize(target_1).detach() * normalize(pred_1)).sum(dim=-1)
+                loss2 = 2 - 2 * (normalize(target_2).detach() * normalize(pred_2)).sum(dim=-1)
+
+              #  print(loss1.mean())
+               # print(loss1.min())
+               # loss1 = torch.max(torch.ones_like(loss1)*0.1 ,loss1)
+                #loss2 = torch.max(torch.ones_like(loss1)*0.1, loss2)
+                loss = args.incoming_neg * (loss1.mean()+loss2.mean())
+
+                #########Not used anymore for now
+                logits1 = self.model.linear(hid1)/self.model.linear.scale_factor
+                logits2 = self.model.linear(hid2) / self.model.linear.scale_factor
+
+
+                loss3 = 0
+                for j,y in enumerate(inc_y[~invalid_idx]):
+                    loss3 += 2-2*logits1[j, y.item()]
+                loss3 = loss3/float(len(logits1))
+                #loss+= (0.3)*loss3
+              #  loss+= -2*logits1[inc_y.unique()].mean()
+
+            else:
+                loss = 0.
+
+        loss_re = 0.
+        if rehearse:
+            # sample from buffer
+            mem_x, mem_y, bt = self.buffer.sample(
+                    args.buffer_batch_size,
+                    aug=args.use_augmentations,
+                    exclude_task= None,
+                    exclude_labels=None
+            )
+
+            hid1 = self.model.return_hidden(mem_x)
+            #hid2 = self.model.return_hidden(pos_x[~invalid_idx])
+            pred_1 = self.model.projection(hid1)
+           # pred_2 = self.model.projection(hid2)
+
+            with torch.no_grad():
+                target_1 = self.model_slow.return_hidden(mem_x).detach()
+            #    target_2 = self.model_slow.return_hidden(inc_x[~invalid_idx])
+
+            # pos_hid_net1 = self.model.return_hidden(pos_x)
+            # pos_hid_net2 = self.model_slow.return_hidden(pos_x)
+
+            # hidden_norm = normalize(hidden[~invalid_idx])
+
+            loss1 = 2 - 2 * (normalize(target_1) * normalize(pred_1)).sum(dim=-1)
+
+            loss_re = F.cross_entropy(self.model(mem_x), mem_y) + 0.5*loss1.mean()
+            #import ipdb;ipdb.set_trace()
+
+        return loss, loss_re
 
 class ER_AML(Method):
 
@@ -437,4 +613,4 @@ class DER(Method):
 
 
 def get_method(method):
-    return {'er': ER, 'triplet': ER_AML, 'mask': ER_ACE, 'icarl': ICARL, 'er_multihead': ER_Multihead, 'der': DER}[method]
+    return {'er': ER, 'triplet': ER_AML, 'mask': ER_ACE, 'icarl': ICARL, 'er_multihead': ER_Multihead, 'der': DER, 'byol': ER_BYOL}[method]

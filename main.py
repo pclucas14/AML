@@ -17,7 +17,7 @@ from methods import get_method
 # Arguments
 # -----------------------------------------------------------------------------------------
 
-METHODS = ['icarl', 'er', 'mask', 'triplet', 'iid', 'iid++', 'icarl_mask', 'icarl_triplet', 'er_multihead', 'der']
+METHODS = ['icarl', 'er', 'mask', 'triplet', 'byol', 'iid', 'iid++', 'icarl_mask', 'icarl_triplet', 'er_multihead', 'der']
 DATASETS = ['split_cifar10', 'split_cifar100', 'miniimagenet']
 
 parser = argparse.ArgumentParser()
@@ -30,16 +30,16 @@ parser.add_argument('--buffer_batch_size', type=int, default=10)
 parser.add_argument('-m','--method', type=str, default='er', choices=METHODS)
 
 """ data """
-parser.add_argument('--download', type=int, default=0)
+parser.add_argument('--download', type=int, default=1)
 parser.add_argument('--n_workers', type=int, default=8)
-parser.add_argument('--data_root', type=str, default='../cl-pytorch/data')
+parser.add_argument('--data_root', type=str, default='data')
 parser.add_argument('--dataset', type=str, default='split_cifar10', choices=DATASETS)
 
 """ setting """
 parser.add_argument('--n_iters', type=int, default=1)
 parser.add_argument('--n_tasks', type=int, default=-1)
 parser.add_argument('--task_free', type=int, default=0)
-parser.add_argument('--use_augmentations', type=int, default=0)
+parser.add_argument('--use_augmentations', type=int, default=1)
 parser.add_argument('--samples_per_task', type=int, default=-1)
 parser.add_argument('--mem_size', type=int, default=20, help='controls buffer size')
 
@@ -50,6 +50,8 @@ parser.add_argument('--wandb_log', type=str, default='off', choices=['off', 'onl
 
 """ HParams """
 parser.add_argument('--lr', type=float, default=0.1)
+
+parser.add_argument('--rehearse', type=int, default=1)
 
 # ER-AML hparams
 parser.add_argument('--margin', type=float, default=0.2)
@@ -130,8 +132,28 @@ model = ResNet18(
         args.n_classes,
         nf=20,
         input_size=args.input_size,
-        dist_linear=args.method in ['triplet', 'mask']
+        dist_linear=args.method in ['triplet', 'mask','byol']
         )
+
+
+if args.method == "byol":
+    # CLASSIFIER
+    model_slow = ResNet18(
+        args.n_classes,
+        nf=20,
+        input_size=args.input_size,
+        dist_linear=args.method in ['triplet', 'mask', 'byol']
+    )
+    model_slow = model_slow.to(device)
+
+    model_slow = model_slow.to(device)
+    model_slow.train()
+    for param_q, param_k in zip(model.parameters(), model_slow.parameters()):
+        param_k.data.copy_(param_q.data)  # initialize param_k.requires_grad = False # not update by gradient
+        param_k.requires_grad = False
+
+else:
+    model_slow = None
 
 model = model.to(device)
 model.train()
@@ -145,7 +167,7 @@ print("number of classifier parameters:",
 print("buffer parameters: ", np.prod(buffer.bx.size()))
 
 # Build Method wrapper
-agent = get_method(args.method)(model, buffer, args)
+agent = get_method(args.method)(model, buffer, args, model_slow=model_slow)
 
 #----------
 # Task Loop
@@ -169,7 +191,7 @@ for task in range(args.n_tasks):
 
         # label each sample with a specific id
         idx = torch.arange(n_seen, n_seen + data.size(0)).to(device)
-        if args.method == 'triplet':
+        if args.method in ['triplet','byol']:
             buffer.add_reservoir(data, target, None, task, idx, overwrite=False)
 
         if i==0:
@@ -180,14 +202,19 @@ for task in range(args.n_tasks):
 
         for it in range(args.n_iters):
             rehearse = task > 0 #(task + i) > 0 if args.task_free else task > 0
-            rehearse = rehearse and ~(args.method in ['iid', 'iid++'])
+            rehearse = rehearse and ~(args.method in ['iid', 'iid++']) and args.rehearse == 1
 
             loss, loss_re = agent.observe(data, target, task, idx, rehearse=rehearse)
             opt.zero_grad()
             (loss + loss_re).backward()
             opt.step()
 
-        if args.method == 'triplet':
+        if args.method == "byol":
+            m = 0.85
+            for param_q, param_k in zip(model.parameters(), model_slow.parameters()):
+                param_k.data = param_k.data * m + param_q.data * (1. - m)
+
+        if args.method in ['triplet', 'byol']:
             buffer.balance_memory()
         else:
             logits = None
@@ -198,13 +225,13 @@ for task in range(args.n_tasks):
         n_seen += data.size(0)
 
     # eval_agent(agent, val_loader, task, mode='valid')
-    eval_agent(agent, test_loader, task, mode='test')
+    eval_agent(agent, test_loader, task, mode='valid')
 
 
 # final run results
 print('\nFinal Results\n')
 
-for mode in ['valid','test']:
+for mode in ['test']:
     final_accs = LOG[mode]['acc'][:,task]
     logging_per_task(wandb, LOG, mode, 'final_acc', task,
         value=np.round(np.mean(final_accs),2))
@@ -222,7 +249,7 @@ for mode in ['valid','test']:
     print('final forgetting: {}'.format(final_forgets))
     print('average: {}\n'.format(LOG[mode]['final_forget']))
 
-    if wandb is not None:
+    if False and wandb is not None:
         for task in range(args.n_tasks):
             wandb.log(
 		{f'{mode}_anytime_acc_avg_all': LOG[mode]['acc'][:task+1, task].mean(),

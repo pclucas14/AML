@@ -96,6 +96,12 @@ class ResNet(nn.Module):
 
         self.activation = nn.ReLU()
 
+        #byol
+        mlp_hidden_size = 1024
+        projection_size = last_hid
+        self.projection = nn.Sequential( nn.Linear(last_hid, mlp_hidden_size), nn.BatchNorm1d(mlp_hidden_size), nn.ReLU(inplace=True), nn.Linear(mlp_hidden_size, projection_size) )
+
+
     def _make_layer(self, block, planes, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
         layers = []
