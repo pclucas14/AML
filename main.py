@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from collections import OrderedDict as OD
 
-from utils     import sho_
+from utils     import sho_, load_best_args
 from logger    import Logger
 from copy      import deepcopy
 from data.base import *
@@ -41,9 +41,10 @@ parser.add_argument('--task_free', type=int, default=0)
 parser.add_argument('--use_augs', type=int, default=0)
 parser.add_argument('--samples_per_task', type=int, default=-1)
 parser.add_argument('--mem_size', type=int, default=20, help='controls buffer size')
-parser.add_argument('--validation', type=int, default=1)
 parser.add_argument('--eval_every', type=int, default=-1)
 parser.add_argument('--run', type=int, default=0)
+parser.add_argument('--validation', type=int, default=1)
+parser.add_argument('--load_best_args', type=int, default=0)
 
 """ logging """
 parser.add_argument('--exp_name', type=str, default='tmp')
@@ -75,6 +76,9 @@ parser.add_argument('--momentum', type=float, default=0.99)
 parser.add_argument('--cope_temperature', type=float, default=0.1)
 
 args = parser.parse_args()
+
+if args.load_best_args:
+    load_best_args(args)
 
 if args.method in ['iid', 'iid++']:
     print('overwriting args for iid setup')

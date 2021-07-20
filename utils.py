@@ -3,6 +3,7 @@ import copy
 import numpy as np
 from collections import OrderedDict as OD
 from collections import defaultdict as DD
+from collections import Iterable
 
 import torch
 import torch.nn as nn
@@ -11,7 +12,41 @@ import torch.nn.functional as F
 import collections
 
 import numpy as np
+import pandas as pd
 import torch
+
+def load_best_args(
+        args,
+        target='acc',
+        avg_over='run',
+        keep=['method', 'use_augs', 'task_free', 'dataset', 'mem_size', 'mir_head_only'],
+    ):
+    # load the dataframe with the hparam runs
+    df = pd.read_csv('sweeps/hp_result.csv')
+
+    # subselect the appropriate runs
+    for key in keep:
+        df = df[df[key] == getattr(args, key)]
+
+    # which arg to overwrite ?
+    unique = df.nunique()
+    arg_list = list(unique[unique > 1].index)
+    arg_list.remove(avg_over)
+    arg_list.remove(target)
+
+    # find the best run
+    acc_per_cfg = df.groupby(arg_list)[target].agg(['mean', 'std'])
+    acc_per_cfg = acc_per_cfg.rename(columns={'mean': f'{target}_mean', 'std': f'{target}_std'})
+    arg_values  = acc_per_cfg[f'{target}_mean'].idxmax()
+
+    if not isinstance(arg_values, Iterable):
+        arg_values = [arg_values]
+
+    print('overwriting args')
+    for (k,v) in zip(arg_list, arg_values):
+        print(f'{k} from {getattr(args, k)} to {v}')
+        setattr(args, k, v)
+
 
 def sho_(x, nrow=8):
     x = x * .5 + .5
