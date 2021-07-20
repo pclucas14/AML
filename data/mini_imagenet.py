@@ -47,7 +47,7 @@ class MiniImagenet(datasets.ImageFolder):
 
         tfs = transforms.Compose([
                transforms.Resize(int(H * 1.25)),
-               transforms.CenterCrop(int(H * 1.15)),
+               transforms.CenterCrop(int(H * 1.15)), # used to be 1.15
                transforms.ToTensor(),
                lambda x : (x - .5) * .5
         ])

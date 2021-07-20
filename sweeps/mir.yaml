@@ -40,3 +40,5 @@ parameters:
     value: 0
   validation: 
     value: 1
+  use_augs: 
+    value: 1

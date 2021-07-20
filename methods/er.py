@@ -34,10 +34,6 @@ class ER(Method):
 
         aug_data = self.train_tf(data['x'])
 
-        if torch.isinf(aug_data).any():
-            import pdb; pdb.set_trace()
-            xx = 1
-
         pred     = self.model(aug_data)
         loss     = self.loss(pred, data['y'])
         return loss
