@@ -1,0 +1,52 @@
+name: 'mir_sweep'
+project: 'final_cl_runs'
+method: grid
+metric:
+  goal: maximize
+  name: valid/avg_acc
+program: main.py
+
+parameters:
+  method:
+    values: 
+    - mir 
+  mir_head_only: 
+    values: 
+    - 0
+    - 1
+  use_augs: 
+    values: 
+    - 0
+    - 1
+  mem_size: 
+    values: 
+    - 20
+    - 50 
+    - 100
+  dataset: 
+    values: 
+    - split_cifar10
+    - split_cifar100
+    - miniimagenet
+  run: 
+    values: 
+    - 0 
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+
+  # defaults
+  wandb_log:
+    value: online
+  task_free: 
+    value: 0
+  validation: 
+    value: 0
+  load_best_args: 
+    value: 1
