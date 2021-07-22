@@ -1,5 +1,5 @@
-name: 'task_free_sweep'
-project: 'final_cl_runs'
+name: 'er_ace_new_aug_sweep'
+project: 'new_aug_cl_sweeps'
 method: grid
 metric:
   goal: maximize
@@ -7,14 +7,13 @@ metric:
 program: main.py
 
 parameters:
-  method:
-    values: 
-    - er
-    - er_aml
-    - er_ace
+  lr: 
+    values:
+    - 0.1
+    - 0.05 
+    - 0.01
   use_augs: 
     values: 
-    - 0
     - 1
   mem_size: 
     values: 
@@ -23,28 +22,18 @@ parameters:
     - 100
   dataset: 
     values: 
-    - split_cifar10
-    - split_cifar100
     - miniimagenet
   run: 
     values: 
     - 0 
     - 1
-    - 2
-    - 3
-    - 4
-    - 5
-    - 6
-    - 7
-    - 8
-    - 9
 
   # defaults
+  method:
+    value: er_ace
   wandb_log:
     value: online
   task_free: 
     value: 1
   validation: 
-    value: 0
-  load_best_args: 
     value: 1

@@ -34,6 +34,8 @@ parser.add_argument('--n_workers', type=int, default=8)
 parser.add_argument('--data_root', type=str, default='../cl-pytorch/data')
 parser.add_argument('--dataset', type=str, default='split_cifar10', choices=DATASETS)
 
+parser.add_argument('--nf', type=int, default=20)
+
 """ setting """
 parser.add_argument('--n_iters', type=int, default=1)
 parser.add_argument('--n_tasks', type=int, default=-1)
@@ -107,7 +109,7 @@ args.train_loader = train_loader
 # CLASSIFIER
 model = ResNet18(
         args.n_classes,
-        nf=20,
+        nf=args.nf,
         input_size=args.input_size,
         dist_linear='ace' in args.method or 'aml' in args.method
         )
