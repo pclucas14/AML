@@ -28,11 +28,13 @@ class ER_ACE(ER):
     def process_inc(self, inc_data):
         """ get loss from incoming data """
 
+        aug_data = self.train_tf(inc_data['x'])
+
         present = inc_data['y'].unique()
         self.seen_so_far = torch.cat([self.seen_so_far, present]).unique()
 
         # process data
-        logits = self.model(inc_data['x'])
+        logits = self.model(aug_data)
         mask   = torch.zeros_like(logits)
 
         # unmask current classes

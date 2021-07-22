@@ -98,8 +98,10 @@ class ER_AML(ER):
                         same_task_neg=True
                     )
 
+            aug_data = self.train_tf(inc_data['x'])
+
             # normalized hidden incoming
-            hidden  = self.model.return_hidden(inc_data['x'])
+            hidden  = self.model.return_hidden(aug_data)
             hidden_norm = normalize(hidden[~invalid_idx])
 
             all_xs  = torch.cat((pos_x, neg_x))
@@ -161,7 +163,11 @@ class ER_AML_Triplet(ER_AML):
             all_hid = all_hid.reshape(2, pos_x.size(0), -1)
             pos_hid, neg_hid = all_hid[:, ~invalid_idx]
 
-            hidden = self.model.return_hidden(inc_data['x'])
+
+            aug_data = self.train_tf(inc_data['x'])
+
+            # normalized hidden incoming
+            hidden  = self.model.return_hidden(aug_data)
             hidden_norm = normalize(hidden[~invalid_idx])
 
             if (~invalid_idx).any():

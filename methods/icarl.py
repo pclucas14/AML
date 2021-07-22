@@ -79,7 +79,9 @@ class ICARL(ER):
         """ get a loss signal from data """
 
         # build label
-        self.logits = self.model(data['x'])
+        aug_data = self.train_tf(data['x'])
+
+        self.logits = self.model(aug_data)
         label  = F.one_hot(data['y'], num_classes=self.logits.size(-1)).float()
 
         loss = self.bce_sum(self.logits.view(-1), label.view(-1)).sum()
