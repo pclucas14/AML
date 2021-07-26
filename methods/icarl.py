@@ -11,10 +11,9 @@ class ICARL(ER):
     def __init__(self, model, logger, train_tf, args):
         super(ICARL, self).__init__(model, logger, train_tf, args)
 
-        assert not args.task_free or args.distill_coef == 0.
+        assert not args.task_free
 
-        self.D_C = args.distill_coef
-        self.distill = args.distill_coef > 0
+        self.D_C = 1
 
         self._centroids = None
         self._old_model = None
@@ -28,16 +27,16 @@ class ICARL(ER):
 
     @property
     def cost(self):
-        cost = 3 * (self.args.batch_size + self.args.buffer_batch_size) / self.args.batch_size
-        if self.D_C > 0:
-            cost += 1 * (self.args.batch_size) / self.args.batch_size
+        cost  = 3 * (self.args.batch_size + self.args.buffer_batch_size) / self.args.batch_size
+
+        # the extra fwd pass for the distillation step
+        cost += 1 * (self.args.buffer_batch_size) / self.args.batch_size
 
         return cost
 
     def _on_task_switch(self):
-        if self.distill:
-            self._old_model = deepcopy(self.model)
-            self._old_model.eval()
+        self._old_model = deepcopy(self.model)
+        self._old_model.eval()
 
     @torch.no_grad()
     def _calculate_centroids(self):
@@ -75,31 +74,33 @@ class ICARL(ER):
         # mask out unobserved centroids
         self._centroids[count < 1] = -1e9
 
-    def _process(self, data):
+    def process_inc(self, inc_data):
         """ get a loss signal from data """
 
         # build label
-        aug_data = self.train_tf(data['x'])
+        aug_data = self.train_tf(inc_data['x'])
 
-        self.logits = self.model(aug_data)
-        label  = F.one_hot(data['y'], num_classes=self.logits.size(-1)).float()
+        logits = self.model(aug_data)
+        label  = F.one_hot(inc_data['y'], num_classes=logits.size(-1)).float()
 
-        loss = self.bce_sum(self.logits.view(-1), label.view(-1)).sum()
-        loss = loss / self.logits.size(0)
+        loss = self.bce_sum(logits.view(-1), label.view(-1)).sum()
+        loss = loss / logits.size(0)
         return loss
 
 
-    def process_inc(self, inc_data):
+    def process_re(self, re_data):
         """ get loss from incoming data """
 
-        loss = self._process(inc_data)
+        aug_data = self.train_tf(re_data['x'])
 
-        # distillation loss
-        if self.distill and self._old_model is not None:
+        loss = 0
+
+        if self._old_model is not None:
             with torch.no_grad():
-                tgt = F.sigmoid(self._old_model(inc_data['x']))
+                tgt = F.sigmoid(self._old_model(aug_data))
 
-            loss += self.D_C * self.bce_sum(self.logits.view(-1), tgt.view(-1)) / inc_data['x'].size(0)
+            logits = self.model(aug_data)
+            loss   = self.bce_sum(logits.view(-1), tgt.view(-1)) / logits.size(0)
 
         return loss
 
