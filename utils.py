@@ -60,6 +60,17 @@ def sho_(x, nrow=8):
     Image.open('tmp.png').show()
 
 
+def save_(x, name='tmp.png'):
+    x = x * .5 + .5
+    from torchvision.utils import save_image
+    from PIL import Image
+    if x.ndim == 5:
+        nrow=x.size(1)
+        x = x.reshape(-1, *x.shape[2:])
+
+    save_image(x, name)
+
+
 # --- MIR utils
 ''' For MIR '''
 def overwrite_grad(pp, new_grad, grad_dims):
