@@ -1,6 +1,6 @@
 name: 'derpp_sweep'
 method: grid
-project: 'cl_sweeps'
+project: 'cl_sweeps2'
 metric:
   goal: maximize
   name: valid/avg_acc
@@ -20,8 +20,8 @@ parameters:
   lr: 
     values:
     - 0.1
-    - 0.05 
-    - 0.01
+    - 0.01 
+    - 0.001
   use_augs: 
     values: 
     - 1
@@ -32,13 +32,14 @@ parameters:
     - 100
   dataset: 
     values: 
-    - split_cifar10
-    - split_cifar100
+    - cifar10
+    - cifar100
     - miniimagenet
   run: 
     values: 
     - 0 
     - 1
+    - 2
 
   # defaults
   method:
