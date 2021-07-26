@@ -14,7 +14,14 @@ class ContinualSampler(torch.utils.data.Sampler):
     def __init__(self, dataset, n_tasks):
         self.ds = dataset
         self.n_tasks = n_tasks
-        self.classes = np.unique(dataset.targets)
+
+        if isinstance(dataset, torch.utils.data.Subset):
+            ds_targets = np.array(dataset.dataset.targets)[dataset.indices]
+        else:
+            ds_targets = dataset.targets
+
+        self.classes = np.unique(ds_targets)
+
         self.n_classes = self.classes.shape[0]
 
         assert self.n_classes % n_tasks == 0
@@ -25,7 +32,7 @@ class ContinualSampler(torch.utils.data.Sampler):
 
         for label in self.classes:
             self.target_indices[label] = \
-                    np.squeeze(np.argwhere(self.ds.targets == label))
+                    np.squeeze(np.argwhere(ds_targets == label))
 
 
     def _fetch_task_samples(self, task):
@@ -72,33 +79,26 @@ def make_val_from_train(dataset, split=.9):
     train_idx = np.concatenate(train_idx)
     val_idx   = np.concatenate(val_idx)
 
-    train_ds.data = train_ds.data[train_idx]
-    train_ds.targets = np.array(train_ds.targets)[train_idx]
-
-    val_ds.data = val_ds.data[val_idx]
-    val_ds.targets = np.array(val_ds.targets)[val_idx]
+    train_ds = torch.utils.data.Subset(dataset, train_idx)
+    val_ds   = torch.utils.data.Subset(dataset, val_idx)
 
     return train_ds, val_ds
 
 
 def get_data_and_tfs(args):
-    dataset = {'split_cifar10' : CIFAR10,
-               'split_cifar100': CIFAR100,
+    dataset = {'cifar10' : CIFAR10,
+               'cifar100': CIFAR100,
                'miniimagenet'  : MiniImagenet}[args.dataset]
 
     if args.n_tasks == -1:
         args.n_tasks = dataset.default_n_tasks
 
-    if args.H is None:
-        H = dataset.default_size
-    else:
-        H = args.H
-
+    H = dataset.default_size
     args.input_size = (3, H, H)
 
-    base_tf  = dataset.base_transforms(H=H)
-    train_tf = dataset.train_transforms(H=H, use_augs=args.use_augs)
-    eval_tf  = dataset.eval_transforms(H=H)
+    base_tf  = dataset.base_transforms()
+    train_tf = dataset.train_transforms(use_augs=args.use_augs)
+    eval_tf  = dataset.eval_transforms()
 
     ds_kwargs = {'root': args.data_root, 'download': args.download}
 
@@ -106,8 +106,8 @@ def get_data_and_tfs(args):
     if args.validation:
         trainval_ds      = dataset(train=True, **ds_kwargs)
         train_ds, val_ds = make_val_from_train(trainval_ds)
-        train_ds.transform = base_tf
-        val_ds.transform   = eval_tf
+        train_ds.dataset.transform = base_tf
+        val_ds.dataset.transform   = eval_tf
     else:
         train_ds         = dataset(train=True, transform=base_tf, **ds_kwargs)
         test_ds          = dataset(train=False, transform=eval_tf, **ds_kwargs)
@@ -115,9 +115,10 @@ def get_data_and_tfs(args):
     train_sampler = ContinualSampler(train_ds, args.n_tasks)
     train_loader  = torch.utils.data.DataLoader(
         train_ds,
+        num_workers=0,
         sampler=train_sampler,
-        num_workers=args.n_workers,
         batch_size=args.batch_size,
+        pin_memory=True
     )
 
     if val_ds is not None:
@@ -125,9 +126,10 @@ def get_data_and_tfs(args):
         test_loader = None
         val_loader  = torch.utils.data.DataLoader(
             val_ds,
+            num_workers=0,
             batch_size=128,
             sampler=val_sampler,
-            num_workers=args.n_workers
+            pin_memory=True
         )
 
     elif test_ds is not None:
@@ -135,9 +137,10 @@ def get_data_and_tfs(args):
         val_loader  = None
         test_loader = torch.utils.data.DataLoader(
             test_ds,
+            num_workers=0,
             batch_size=128,
             sampler=test_sampler,
-            num_workers=args.n_workers
+            pin_memory=True
         )
 
 

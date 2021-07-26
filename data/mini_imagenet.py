@@ -5,12 +5,12 @@ import torch
 import kornia
 import numpy as np
 
+import pickle as pkl
 from copy import deepcopy
 from torchvision import datasets, transforms
 
-
 """ Datasets """
-class MiniImagenet(datasets.ImageFolder):
+class MiniImagenet(datasets.VisionDataset):
 
     default_size = 84
     default_n_tasks = 20
@@ -18,74 +18,72 @@ class MiniImagenet(datasets.ImageFolder):
     def __init__(self, root, train=True, transform=None, download=False):
 
         if download:
-            dump_path = os.path.join(root, 'miniimagenet')
+            dump_path = os.path.join(root, 'mini_imagenet')
             if os.path.exists(dump_path):
                 print('MiniIm directory exists, skipping download')
             else:
                 download_file_from_google_drive(
-                    '1f-AR7gWPOvo5Noxi25hDE8LD878oa5vc',
-                    root,
-                    'miniim.tar.gz'
+                    '1gJBUejzwUxBZWaQ_kYYvbXvxcQ0h1PbP',
+                    dump_path,
+                    'archive.zip'
                 )
-                os.system('cd miniimagenet & tar -xvf miniim.tar.gz')
+                os.system(f'cd {dump_path} && unzip archive.zip')
 
-        path = os.path.join(root, 'miniimagenet', 'train' if train else 'test')
-        print(path)
-        super(MiniImagenet, self).__init__(
-            root=path,
-            transform=transform
-        )
+        all_data = []
+        for split in ['train', 'val', 'test']:
+            afile = open(os.path.join(root, f'mini_imagenet/mini-imagenet-cache-{split}.pkl'), 'rb')
+            data  = pkl.load(afile)['image_data'].reshape(-1, 600, 84, 84, 3)
+            all_data += [data]
 
-        self.data = np.array([x[0] for x in self.samples])
+        all_data = np.concatenate(all_data)
+
+        split = int(1 / 6 * all_data.shape[1])
+        all_data = all_data[:, split:] if train else all_data[:, :split]
+        all_data = (torch.from_numpy(all_data).float() / 255.) # - .5) * 2
+
+        self.data = all_data.reshape(-1, *all_data.shape[2:]).permute(0, 3, 2, 1)
+        self.targets = np.arange(100).reshape(-1, 1).repeat(all_data.size(1), axis=1).reshape(-1)
 
 
-    def base_transforms(H=None):
+    def __getitem__(self, index):
+        x, y = self.data[index], self.targets[index]
+
+        if self.transform is not None:
+            x = self.transform(x)
+
+        return x, y
+
+
+
+    def base_transforms():
         """ base transformations applied to *train* images """
 
-        if H is None:
-            H = MiniImagenet.default_size
-
-        tfs = transforms.Compose([
-               transforms.Resize(int(H * 1.25)),
-               transforms.CenterCrop(int(H * 1.15)), # used to be 1.15
-               transforms.ToTensor(),
-               lambda x : (x - .5) * .5
-        ])
-
-        return tfs
+        return None
 
 
-    def train_transforms(H=None, use_augs=False):
+    def train_transforms(use_augs=False):
         """ extra augs applied over *training* images """
 
-        if H is None:
-            H = MiniImagenet.default_size
+        H = MiniImagenet.default_size
 
         if use_augs:
+            aug = kornia.augmentation
             tfs = torch.nn.Sequential(
-                kornia.augmentation.RandomCrop(size=(H, H)),
-                kornia.augmentation.RandomHorizontalFlip(),
+                #aug.RandomResizedCrop(size=(H, H), scale=(0.2, 1.)),
+                aug.RandomHorizontalFlip(),
+                aug.ColorJitter(0.4, 0.4, 0.4, 0.1, p=0.8),
+                aug.RandomGrayscale(p=0.2),
             )
         else:
-            tfs = kornia.augmentation.CenterCrop(size=(H, H))
+            tfs = torch.nn.Identity()
 
         return tfs
 
 
-    def eval_transforms(H):
+    def eval_transforms():
         """ base transformations applied during evaluation """
 
-        if H is None:
-            H = MiniImagenet.default_size
-
-        tfs = transforms.Compose([
-               transforms.Resize(int(H * 1.15)), # should this be 1.25 ?
-               transforms.CenterCrop(H),
-               transforms.ToTensor(),
-               lambda x : (x - .5) * .5
-        ])
-
-        return tfs
+        return None
 
 
 # --- Utilities to download the dataset from google drive --- #

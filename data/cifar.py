@@ -15,43 +15,64 @@ class CIFAR:
 
     default_size = 32
 
-    def base_transforms(H=None):
+    def base_transforms():
+        return None
 
-        if H is None:
-            H = CIFAR.default_size
+    def train_transforms(use_augs=False):
 
-        tfs = transforms.Compose([
-            transforms.Resize(H),
-            transforms.ToTensor(),
-            #transforms.Normalize((0.4914, 0.4822, 0.4465),
-            #                     (0.2470, 0.2435, 0.2615))
-            lambda x : (x - .5) * 2.
-        ])
-
-        return tfs
-
-    def train_transforms(H=None, use_augs=False):
-
-        if H is None:
-            H = CIFAR.default_size
+        H = CIFAR.default_size
 
         if use_augs:
             tfs = nn.Sequential(
-                kornia.augmentation.RandomCrop(size=(H, H), padding=4, fill=-1), #.98),
+                kornia.augmentation.RandomCrop(size=(H, H), padding=4, fill=-1),
                 kornia.augmentation.RandomHorizontalFlip(),
             )
         else:
             tfs = nn.Identity()
 
-
         return tfs
 
-    def eval_transforms(H=None):
-        return CIFAR.base_transforms(H=H)
+    def eval_transforms():
+        return None
 
 
 class CIFAR10(CIFAR, datasets.CIFAR10):
     default_n_tasks = 5
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.data = torch.from_numpy(self.data).float().permute(0, 3, 1, 2)
+        self.targets = np.array(self.targets)
+
+        self.data = (self.data / 255. - .5) * 2.
+
+
+    def __getitem__(self, index):
+        x, y = self.data[index], self.targets[index]
+
+        if self.transform is not None:
+            x = self.transform(x)
+
+        return x, y
+
+
 class CIFAR100(CIFAR, datasets.CIFAR100):
     default_n_tasks = 20
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.data = torch.from_numpy(self.data).float().permute(0, 3, 1, 2)
+        self.targets = np.array(self.targets)
+
+        self.data = (self.data / 255. - .5) * 2.
+
+
+    def __getitem__(self, index):
+        x, y = self.data[index], self.targets[index]
+
+        if self.transform is not None:
+            x = self.transform(x)
+
+        return x, y
