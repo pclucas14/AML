@@ -28,11 +28,9 @@ parser.add_argument('--buffer_batch_size', type=int, default=10)
 parser.add_argument('-m','--method', type=str, default='er', choices=METHODS.keys())
 
 """ data """
-parser.add_argument('--H', type=int, default=None)
 parser.add_argument('--download', type=int, default=0)
-parser.add_argument('--n_workers', type=int, default=8)
 parser.add_argument('--data_root', type=str, default='../cl-pytorch/data')
-parser.add_argument('--dataset', type=str, default='split_cifar10', choices=DATASETS)
+parser.add_argument('--dataset', type=str, default='cifar10', choices=DATASETS)
 
 parser.add_argument('--nf', type=int, default=20)
 
@@ -92,7 +90,7 @@ if args.method in ['iid', 'iid++']:
 # -----------------------------------------------------------------------------------------
 
 if torch.cuda.is_available():
-    device = 'cuda:0'
+    device = 'cuda'
 else:
     device = 'cpu'
 
@@ -149,7 +147,10 @@ def eval_agent(agent, loader, task, mode='valid'):
 
         # iterate over samples from task
         for i, (data, target) in enumerate(loader):
-            data, target = data.to(device), target.to(device)
+
+            if device == 'cuda':
+                data   = data.cuda(non_blocking=True)
+                target = target.cuda(non_blocking=True)
 
             logits = agent.predict(data)
             pred   = logits.max(1)[1]
@@ -158,7 +159,6 @@ def eval_agent(agent, loader, task, mode='valid'):
             n_total += data.size(0)
 
         accs[task_t] = n_ok / n_total * 100
-
 
     avg_acc = np.mean(accs[:task + 1])
     print('\n', '\t'.join([str(int(x)) for x in accs]), f'\tAvg Acc: {avg_acc:.2f}')
@@ -184,6 +184,7 @@ for task in range(args.n_tasks):
 
     n_seen = 0
     agent.train()
+    start = time.time()
 
     #---------------
     # Minibatch Loop
@@ -194,8 +195,9 @@ for task in range(args.n_tasks):
 
         if n_seen > args.samples_per_task > 0: break
 
-        x = x.to(device)
-        y = y.to(device)
+        if device == 'cuda':
+            x = x.cuda(non_blocking=True)
+            y = y.cuda(non_blocking=True)
 
         inc_data = {'x': x, 'y': y, 't': task}
 
@@ -204,6 +206,7 @@ for task in range(args.n_tasks):
         n_seen += x.size(0)
 
     # always eval at end of tasks
+    print(f'Task {task} over. took {time.time() - start}')
     eval_accs  += [eval_agent(agent, eval_loader, task, mode=mode)]
 
 
