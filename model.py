@@ -80,14 +80,14 @@ class ResNet(nn.Module):
 
         self.conv1 = conv3x3(input_size[0], nf * 1)
         self.bn1 = nn.BatchNorm2d(nf * 1)
-        #self.bn1  = CategoricalConditionalBatchNorm(nf, 2)
         self.layer1 = self._make_layer(block, nf * 1, num_blocks[0], stride=1)
         self.layer2 = self._make_layer(block, nf * 2, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(block, nf * 4, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, nf * 8, num_blocks[3], stride=2)
 
         # hardcoded for now
-        last_hid = nf * 8 * block.expansion #if input_size[1] in [8,16,21,32,42] else 640
+        last_hid = nf * 8 * block.expansion
+        last_hid = last_hid * (self.input_size[-1] // 2 // 2 // 2 // 4) ** 2
 
         if dist_linear:
             self.linear = distLinear(last_hid,num_classes)
@@ -107,15 +107,13 @@ class ResNet(nn.Module):
     def return_hidden(self, x):
         bsz = x.size(0)
         assert x.ndim == 4
-        #pre_bn = self.conv1(x.view(bsz, 3, 32, 32))i
-        #post_bn = self.bn1(pre_bn, 1 if is_real else 0)
-        #out = F.relu(post_bn)
         out = self.activation(self.bn1(self.conv1(x)))
         out = self.layer1(out)
         out = self.layer2(out)
         out = self.layer3(out)
         out = self.layer4(out)
-        out = F.adaptive_avg_pool2d(out, 1)
+        # out = F.adaptive_avg_pool2d(out, 1)
+        out = F.avg_pool2d(out, 4)
         out = out.view(out.size(0), -1)
         return out
 
