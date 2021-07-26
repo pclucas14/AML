@@ -109,10 +109,6 @@ class Buffer(nn.Module):
             buffer = getattr(self, f'b{name}')
 
             if isinstance(data, Iterable):
-                idx = idx_new_data.cpu().numpy()
-                idx_buf = idx_buffer.cpu().numpy()
-                buf = buffer.cpu().numpy()
-                data_ = data.cpu().numpy()
                 buffer[idx_buffer] = data[idx_new_data]
             else:
                 buffer[idx_buffer] = data
@@ -206,8 +202,6 @@ class Buffer(nn.Module):
         else:
             idx_np = np.random.choice(buffers['x'].size(0), amt, replace=False)
             indices = torch.from_numpy(idx_np).to(self.bx.device)
-            by_np = self.by.clone().cpu().data.numpy()
-            bx_np = self.bx.clone().cpu().data.numpy()
 
             return OrderedDict({k:v[indices] for (k,v) in buffers.items()})
 
