@@ -39,7 +39,7 @@ class MiniImagenet(datasets.VisionDataset):
 
         split = int(1 / 6 * all_data.shape[1])
         all_data = all_data[:, split:] if train else all_data[:, :split]
-        all_data = (torch.from_numpy(all_data).float() / 255.) # - .5) * 2
+        all_data = (torch.from_numpy(all_data).float() / 255. - .5) * 2
 
         self.data = all_data.reshape(-1, *all_data.shape[2:]).permute(0, 3, 2, 1)
         self.targets = np.arange(100).reshape(-1, 1).repeat(all_data.size(1), axis=1).reshape(-1)
@@ -69,9 +69,10 @@ class MiniImagenet(datasets.VisionDataset):
         if use_augs:
             aug = kornia.augmentation
             tfs = torch.nn.Sequential(
+                aug.RandomCrop(size=(H, H), padding=4, fill=-1),
                 #aug.RandomResizedCrop(size=(H, H), scale=(0.2, 1.)),
                 aug.RandomHorizontalFlip(),
-                aug.ColorJitter(0.4, 0.4, 0.4, 0.1, p=0.8),
+                # aug.ColorJitter(0.4, 0.4, 0.4, 0.1, p=0.8),
                 aug.RandomGrayscale(p=0.2),
             )
         else:
