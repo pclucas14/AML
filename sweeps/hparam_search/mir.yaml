@@ -11,6 +11,10 @@ parameters:
     values: 
     - 1
     - 0
+  use_augs: 
+    values: 
+    - 0
+    - 1
   lr: 
     values:
     - 0.1
@@ -40,6 +44,4 @@ parameters:
   task_free: 
     value: 0
   validation: 
-    value: 1
-  use_augs: 
     value: 1
