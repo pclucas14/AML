@@ -60,9 +60,8 @@ class ER(Method):
         for it in range(self.args.n_iters):
             # --- training --- #
             inc_loss = self.process_inc(inc_data)
-            assert inc_data['x'].size(0) == inc_data['y'].size(0), pdb.set_trace()
 
-            re_loss, re_data = 0., None
+            re_loss  = 0
             if len(self.buffer) > 0:
 
                 # -- rehearsal starts ASAP. No task id is used
