@@ -21,7 +21,7 @@ class AGEM(ER):
     @property
     def name(self):
         args = self.args
-        return f'AGEM_{args.dataset}_M{args.mem_size}_Augs{args.use_augs}_TF{args.task_free}'
+        return f'AGEM_{args.dataset}_M{args.mem_size}_Augs{args.use_augs}_TF{args.task_free}_LR{args.lr}'
 
 
     def overwrite_grad(self, projected_grad):
@@ -86,3 +86,7 @@ class AGEMpp(AGEM):
         overwrite_grad(self.model.parameters, projected_grad + self.grad_re, self.grad_dims)
 
 
+    @property
+    def name(self):
+        args = self.args
+        return f'AGEM++_{args.dataset}_M{args.mem_size}_Augs{args.use_augs}_TF{args.task_free}_LR{args.lr}'
