@@ -22,7 +22,7 @@ def load_best_args(
         keep=['method', 'use_augs', 'task_free', 'dataset', 'mem_size', 'mir_head_only'],
     ):
     # load the dataframe with the hparam runs
-    df = pd.read_csv('sweeps/hp_result.csv')
+    df = pd.read_csv('sweeps/hp_result_final.csv')
 
     # subselect the appropriate runs
     for key in keep:
