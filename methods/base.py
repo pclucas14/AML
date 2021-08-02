@@ -38,12 +38,6 @@ class Method():
 
 
     @property
-    def infererence_cost(self):
-
-        return self.cost
-
-
-    @property
     def one_sample_flop(self):
         if not hasattr(self, '_train_cost'):
             input = torch.FloatTensor(size=(1,) + self.args.input_size).to(self.device)
