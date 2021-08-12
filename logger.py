@@ -39,13 +39,16 @@ class Logger:
 
 
 
-    def log_scalars(self, values):
+    def log_scalars(self, values, verbose=False):
 
         for k,v in values.items():
             self.to_pickle += [(k, v, self.step)]
 
         if self.wandb is not None:
             self.wandb.log(values, step=self.step)
+
+        if verbose:
+            print(values)
 
         if self.step % self.save_every == 0:
             self.dump()
