@@ -7,7 +7,7 @@ from .agem import AGEM, AGEMpp
 from .cope import CoPE
 from .der import DER, DERpp
 from .iid import IID, IIDpp
-from .moco import MoCo
+from .ssil import SSIL
 
 from collections import OrderedDict
 
@@ -24,6 +24,5 @@ METHODS = OrderedDict({
         'der++' : DERpp,
         'agem'  : AGEM,
         'agem++': AGEMpp,
-        'moco'  : MoCo
-        #'cope'  : cope
+        'ssil'  : SSIL
 })
