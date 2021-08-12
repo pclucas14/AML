@@ -15,6 +15,8 @@ from pydoc     import locate
 from model     import ResNet18, normalize
 from methods   import *
 
+torch.set_num_threads(4)
+
 # Arguments
 # -----------------------------------------------------------------------------------------
 
@@ -31,6 +33,7 @@ parser.add_argument('-m','--method', type=str, default='er', choices=METHODS.key
 parser.add_argument('--download', type=int, default=0)
 parser.add_argument('--data_root', type=str, default='../cl-pytorch/data')
 parser.add_argument('--dataset', type=str, default='cifar10', choices=DATASETS)
+parser.add_argument('--smooth', type=int, default=0)
 
 parser.add_argument('--nf', type=int, default=20)
 
@@ -183,6 +186,7 @@ for task in range(args.n_tasks):
     train_loader.sampler.set_task(task)
 
     n_seen = 0
+    unique = 0
     agent.train()
     start = time.time()
 
@@ -191,7 +195,8 @@ for task in range(args.n_tasks):
 
     print('\nTask #{} --> Train Classifier\n'.format(task))
     for i, (x,y) in enumerate(train_loader):
-        print(f'{i} / {len(train_loader)}', end='\r')
+        if i % 20 == 0: print(f'{i} / {len(train_loader)}', end='\r')
+        unique += y.unique().size(0)
 
         if n_seen > args.samples_per_task > 0: break
 
@@ -206,7 +211,7 @@ for task in range(args.n_tasks):
         n_seen += x.size(0)
 
     # always eval at end of tasks
-    print(f'Task {task} over. took {time.time() - start}')
+    print(f'Task {task} over. took {time.time() - start:.2f} Avg unique label {unique / i}')
     eval_accs  += [eval_agent(agent, eval_loader, task, mode=mode)]
 
 
@@ -226,6 +231,6 @@ logger.log_scalars({
     'metrics/cost': agent.cost,
     'metrics/one_sample_flop': agent.one_sample_flop,
     'metrics/buffer_n_bits': agent.buffer.n_bits()
-})
+}, verbose=True)
 
 logger.close()

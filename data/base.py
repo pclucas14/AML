@@ -11,9 +11,10 @@ from data import *
 # ---  Samplers --- #
 class ContinualSampler(torch.utils.data.Sampler):
 
-    def __init__(self, dataset, n_tasks):
+    def __init__(self, dataset, n_tasks, smooth=False):
         self.ds = dataset
         self.n_tasks = n_tasks
+        self.smooth = smooth
 
         if isinstance(dataset, torch.utils.data.Subset):
             ds_targets = np.array(dataset.dataset.targets)[dataset.indices]
@@ -22,6 +23,7 @@ class ContinualSampler(torch.utils.data.Sampler):
 
         self.classes = np.unique(ds_targets)
 
+        self.n_samples = ds_targets.shape[0]
         self.n_classes = self.classes.shape[0]
 
         assert self.n_classes % n_tasks == 0
@@ -30,13 +32,18 @@ class ContinualSampler(torch.utils.data.Sampler):
         self.task = None
         self.target_indices = {}
 
+        # for smooth datasets
+        self.t = 0
+        self.per_class_samples_left = torch.zeros(self.classes.shape[0]).int()
+
         for label in self.classes:
             self.target_indices[label] = \
                     np.squeeze(np.argwhere(ds_targets == label))
+            np.random.shuffle(self.target_indices[label])
+            self.per_class_samples_left[label] = self.target_indices[label].shape[0]
 
 
     def _fetch_task_samples(self, task):
-        task = self.task
         task_classes = self.classes[self.cpt * task: self.cpt * (task + 1)]
 
         task_samples = []
@@ -52,14 +59,43 @@ class ContinualSampler(torch.utils.data.Sampler):
 
 
     def __iter__(self):
-        self._fetch_task_samples(self.task)
+        if self.smooth:
+            samples_per_class = self.n_samples // self.n_classes
+            samples_per_task  = self.n_samples // self.n_tasks
+            cls = torch.arange(self.n_classes)
+            var = (samples_per_class // 2) * 2.5 # 4
+            std = np.sqrt(var)
+            mu  = (2 * cls - 1) * samples_per_class / 2.
 
-        for item in self.task_samples:
-            yield item
+            for t in range(samples_per_task):
+                # sample class probs
+                pmf   = torch.exp((self.t - mu).div_(var)).pow(2).div(-2).div(std * 1.414)
+                pmf[self.per_class_samples_left <= 0] = 0
+                prob  = pmf / pmf.sum()
+                class_id = torch.where((np.random.uniform(0, 1) + prob.cumsum(0)) > 1.)[0].min().item()
+
+                # weird bug with this line of code
+                # torch.multinomial(prob, 1).item()
+
+                self.per_class_samples_left[class_id] -= 1
+                yield self.target_indices[class_id][self.per_class_samples_left[class_id]]
+
+                import pdb
+                # assert (self.per_class_samples_left < 0).sum().item() == 0, pdb.set_trace()
+
+                self.t += 1
+
+
+        else:
+            self._fetch_task_samples(self.task)
+
+            for item in self.task_samples:
+                yield item
 
 
     def __len__(self):
-        return len(self.task_samples)
+        samples_per_task  = self.n_samples // self.n_tasks
+        return samples_per_task
 
 
     def set_task(self, task):
@@ -93,6 +129,7 @@ def get_data_and_tfs(args):
     if args.n_tasks == -1:
         args.n_tasks = dataset.default_n_tasks
 
+
     H = dataset.default_size
     args.input_size = (3, H, H)
 
@@ -112,7 +149,7 @@ def get_data_and_tfs(args):
         train_ds         = dataset(train=True, transform=base_tf, **ds_kwargs)
         test_ds          = dataset(train=False, transform=eval_tf, **ds_kwargs)
 
-    train_sampler = ContinualSampler(train_ds, args.n_tasks)
+    train_sampler = ContinualSampler(train_ds, args.n_tasks, smooth=args.smooth)
     train_loader  = torch.utils.data.DataLoader(
         train_ds,
         num_workers=0,
@@ -145,5 +182,6 @@ def get_data_and_tfs(args):
 
 
     args.n_classes = train_sampler.n_classes
+    args.n_classes_per_task = args.n_classes // args.n_tasks
 
     return train_tf, train_loader, val_loader, test_loader
