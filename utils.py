@@ -19,14 +19,18 @@ def load_best_args(
         args,
         target='acc',
         avg_over='run',
-        keep=['method', 'use_augs', 'task_free', 'dataset', 'mem_size', 'mir_head_only'],
+        keep=['method', 'use_augs', 'task_free', 'dataset', 'mem_size', 'mir_head_only', 'distill_coef', 'n_iters'],
     ):
     # load the dataframe with the hparam runs
     df = pd.read_csv('sweeps/hp_result_final.csv')
 
     # subselect the appropriate runs
     for key in keep:
-        df = df[df[key] == getattr(args, key)]
+        new_df = df[df[key] == getattr(args, key)]
+        if new_df.shape[0] == 0:
+            print(f'skipping over {key}')
+        else:
+            df = new_df
 
     # which arg to overwrite ?
     unique = df.nunique()
@@ -44,6 +48,8 @@ def load_best_args(
 
     print('overwriting args')
     for (k,v) in zip(arg_list, arg_values):
+        if k in keep:
+            continue
         print(f'{k} from {getattr(args, k)} to {v}')
         setattr(args, k, v)
 
