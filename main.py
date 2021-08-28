@@ -63,8 +63,8 @@ parser.add_argument('--buffer_neg', type=float, default=0)
 parser.add_argument('--incoming_neg', type=float, default=2.0)
 parser.add_argument('--supcon_temperature', type=float, default=0.2)
 
-# ICARL hparams
-parser.add_argument('--distill_coef', type=float, default=1.)
+# ICARL hparams / SS-IL
+parser.add_argument('--distill_coef', type=float, default=0.)
 
 # DER params
 parser.add_argument('--alpha', type=float, default=.1)
@@ -121,6 +121,7 @@ model.train()
 agent = METHODS[args.method](model, logger, train_tf, args)
 n_params = sum(np.prod(p.size()) for p in model.parameters())
 
+print(model)
 print("number of classifier parameters:", n_params)
 
 eval_accs = []
