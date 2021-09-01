@@ -26,7 +26,7 @@ class ContinualSampler(torch.utils.data.Sampler):
         self.n_samples = ds_targets.shape[0]
         self.n_classes = self.classes.shape[0]
 
-        assert self.n_classes % n_tasks == 0
+        #assert self.n_classes % n_tasks == 0
         classes_per_task = self.cpt = self.n_classes // n_tasks
 
         self.task = None
@@ -164,7 +164,7 @@ def get_data_and_tfs(args):
         val_loader  = torch.utils.data.DataLoader(
             val_ds,
             num_workers=0,
-            batch_size=128,
+            batch_size=1024,
             sampler=val_sampler,
             pin_memory=True
         )
