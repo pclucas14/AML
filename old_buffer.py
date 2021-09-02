@@ -10,8 +10,6 @@ from collections import OrderedDict
 from collections import Iterable
 from utils import *
 
-from old_buffer import Buffer as OldBuffer
-
 class Buffer(nn.Module):
     def __init__(
         self,
@@ -35,9 +33,6 @@ class Buffer(nn.Module):
 
         self.device = device
 
-        self.old_buffer = OldBuffer(device, capacity * 100, input_size)
-        self.old_buffer.add = self.old_buffer.add_balanced
-        self.old_buffer.tag = False
 
     def __len__(self):
         return self.current_index
@@ -103,40 +98,20 @@ class Buffer(nn.Module):
         idx_new_data  = valid_indices.nonzero().squeeze(-1)
         idx_buffer    = indices[idx_new_data]
 
-        idx_not_new_data = torch.where(valid_indices == 0)[0]
-
-        # self.old_buffer.n_seen_so_far = self.n_seen_so_far
         self.n_seen_so_far += n_elem
         self.current_index = min(self.n_seen_so_far, self.cap)
-
-        if batch['t'] == 1 and not self.old_buffer.tag:
-            print('tagging')
-            self.old_buffer.tag = True
-            self.old_buffer.n_seen_so_far = int(2 / batch['x'].size(0) * (self.n_seen_so_far - batch['x'].size(0)))
-
 
         if idx_buffer.numel() == 0:
             return
 
         # perform overwrite op
-        not_added = OrderedDict()
         for name, data in batch.items():
             buffer = getattr(self, f'b{name}')
 
             if isinstance(data, Iterable):
                 buffer[idx_buffer] = data[idx_new_data]
-                not_added[name] = data[idx_not_new_data]
             else:
                 buffer[idx_buffer] = data
-                not_added[name] = data
-
-        if self.old_buffer.tag:
-            target = int((self.n_seen_so_far - batch['x'].size(0)) / 5.)
-            missing = target - self.old_buffer.n_seen_so_far
-            not_added = OrderedDict({k:v[:missing] if isinstance(v, Iterable) else v for (k,v) in not_added.items()})
-            self.old_buffer.n_seen_so_far = target
-
-        self.old_buffer.add(not_added)
 
 
     def add_balanced(self, batch):

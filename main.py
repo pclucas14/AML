@@ -5,6 +5,7 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 from collections import OrderedDict as OD
+import wandb
 
 from utils     import sho_, load_best_args
 from logger    import Logger
@@ -118,9 +119,12 @@ model = ResNet18(
 model = model.to(device)
 model.train()
 
+wandb.init(project='ace_drift', name=args.exp_name, config=args)
+
 agent = METHODS[args.method](model, logger, train_tf, args)
 n_params = sum(np.prod(p.size()) for p in model.parameters())
 buffer = agent.buffer
+not_added = buffer.old_buffer
 
 print(model)
 print("number of classifier parameters:", n_params)
@@ -133,24 +137,13 @@ else:
     mode = 'test'
     eval_loader = test_loader
 
-
-# Get The Test Set from the first task
-train_xs, train_ys = [], []
 test_xs, test_ys = [], []
-for i in range(args.n_tasks):
-    train_loader.sampler.set_task(i)
-    val_loader.sampler.set_task(i)
+for task in range(args.n_tasks):
+    val_loader.sampler.set_task(task)
     aa, bb = next(iter(val_loader))
     test_xs += [aa.to(device)]
     test_ys += [bb.to(device)]
 
-    for i, (aa, bb) in enumerate(train_loader):
-        train_xs += [aa.to(device)]
-        train_ys += [bb.to(device)]
-        if i == 19: break
-
-train_xs = torch.cat(train_xs)
-train_ys = torch.cat(train_ys)
 
 def measure_drift(model, x, y, proto=None):
     model.eval()
@@ -285,22 +278,40 @@ for task in range(args.n_tasks):
     print('\nTask #{} --> Train Classifier\n'.format(task))
     for i, (x,y) in enumerate(train_loader):
 
-        if task>0 and (i<11 or i%10==0):
+        to_log = {}
+        if (task + i) > 100:
             with torch.no_grad():
                 model.eval()
                 knns_tr, knns_buf = [], []
-                train_feats_buf = model.return_hidden(buffer.bx)
-                train_feats_tr = model.return_hidden(train_xs)
-                for test_task in range(args.n_tasks):
+
+                # make sure not added buffer has the same sample dist
+                counts = buffer.by.bincount()
+                idxs = []
+                for it, count in enumerate(counts):
+                    idx = torch.where(not_added.by == it)[0][:count]
+                    idxs += [idx]
+
+                idxs = torch.cat(idxs)
+                tr_x, tr_y = not_added.bx[idxs], not_added.by[idxs]
+                bf_x, bf_y = buffer.bx, buffer.by
+
+                assert (tr_y.bincount() == bf_y.bincount()).all(), pdb.set_trace()
+
+                tr_hid = F.normalize(model.return_hidden(tr_x), p=2, dim=-1)
+                bf_hid = F.normalize(model.return_hidden(bf_x), p=2, dim=-1)
+
+                for test_task in range(task + 1):
                     feat = model.return_hidden(test_xs[test_task])
-                    acc_tr  = knn_classifier(train_feats_tr, train_ys, feat, test_ys[test_task], num_classes=args.n_classes)[0]
-                    acc_buf  = knn_classifier(train_feats_buf, buffer.by, feat, test_ys[test_task], num_classes=args.n_classes)[0]
+                    acc_tr   = knn_classifier(tr_hid,  tr_y,      feat, test_ys[test_task], num_classes=args.n_classes)[0]
+                    acc_buf  = knn_classifier(bf_hid,  buffer.by, feat, test_ys[test_task], num_classes=args.n_classes)[0]
                     knns_tr += [acc_tr]
                     knns_buf += [acc_buf]
+                    to_log[f'knn_not_buffer_{test_task}'] =  acc_tr
+                    to_log[f'knn_buffer_{test_task}']     =  acc_buf
 
                 print(i, 'train', [f' {x:.2f}' for x in knns_tr], f'{np.mean(knns_tr):.2f}', '\tbuffer', [f' {x:.2f}' for x in knns_buf], f'{np.mean(knns_buf):.2f}')
 
-            model.train()
+                model.train()
 
 
         if i % 20 == 0: print(f'{i} / {len(train_loader)}', end='\r')
@@ -314,81 +325,15 @@ for task in range(args.n_tasks):
 
         inc_data = {'x': x, 'y': y, 't': task}
 
-
-        '''
-        if task > 0 and i<10:#(i < 5 or i % 150 == 0):
-            model.eval()
-            test_set_align, buffer_align = [], []
-            for test_task in range(task + 1):
-                idx = agent.buffer.bt == test_task
-                if idx.int().sum() > 0:
-                    test_set_align += [ measure_drift(model, test_xs[test_task], test_ys[test_task]).item() ]
-                    buffer_align   += [ measure_drift(model, agent.buffer.bx[idx], agent.buffer.by[idx]).item() ]
-
-            #print(f'i {i} : test set alignment\t', [f'{x:.2f}' for x in test_set_align])
-            idx = torch.arange(args.n_classes_per_task) + task * args.n_classes_per_task
-            #print(f'i {i} : Buffer alignment\t', [f'{x:.2f}' for x in buffer_align])
-        '''
-        '''
-        test_set_align, buffer_align = [], []
-        for test_task in range(task + 1):
-            idx = agent.buffer.bt == test_task
-            if idx.int().sum() > 0:
-                test_set_align += [ measure_drift(model, test_xs[test_task], test_ys[test_task], proto=last_proto).item() ]
-                buffer_align   += [ measure_drift(model, agent.buffer.bx[idx], agent.buffer.by[idx], proto=last_proto).item() ]
-
-        print(f'i {i} : last test set alignment\t', [f'{x:.2f}' for x in test_set_align])
-        idx = torch.arange(args.n_classes_per_task) + task * args.n_classes_per_task
-        print(f'i {i} : last Buffer alignment\t', [f'{x:.2f}' for x in buffer_align])
-
-        '''
-
         agent.observe(inc_data)
         n_seen += x.size(0)
-'''
-    # always eval at end of tasks
-    print(f'Task {task} over. took {time.time() - start:.2f} Avg unique label {unique / i}')
-    eval_accs  += [eval_agent(agent, eval_loader, task, mode=mode)]
 
-    print('Task 0 test set drift\t', measure_drift(model, test_xs[0], test_ys[0]).item())
+        if (task + i) > 100:
+            # compute drift
+            with torch.no_grad():
+                post_tr_hid = F.normalize(model.return_hidden(tr_x), p=2, dim=-1)
+                post_bf_hid = F.normalize(model.return_hidden(bf_x), p=2, dim=-1)
+                to_log['drift_not_buffer'] = F.mse_loss(post_tr_hid, tr_hid).item()
+                to_log['drift_buffer'] = F.mse_loss(post_bf_hid, bf_hid).item()
 
-    idx = agent.buffer.by < args.n_classes_per_task
-    print('Task 0 Buffer drift\t',  measure_drift(model, agent.buffer.bx[idx], agent.buffer.by[idx]).item())
-
-
-
-
-# ----- Final Results ----- #
-
-accs    = np.stack(eval_accs).T
-avg_acc = accs[:, -1].mean()
-avg_fgt = (accs.max(1) - accs[:, -1])[:-1].mean()
-
-print('\nFinal Results\n')
-logger.log_matrix(f'{mode}_acc', accs)
-logger.log_scalars({
-    f'{mode}/avg_acc': avg_acc,
-    f'{mode}/avg_fgt': avg_fgt,
-    'train/n_samples': n_seen,
-    'metrics/model_n_bits': n_params * 32,
-    'metrics/cost': agent.cost,
-    'metrics/one_sample_flop': agent.one_sample_flop,
-    'metrics/buffer_n_bits': agent.buffer.n_bits()
-}, verbose=True)
-
-logger.close()
-'''
-with torch.no_grad():
-    model.eval()
-    knns = []
-    train_feats = model.return_hidden(buffer.bx)#train_xs)
-    for test_task in range(args.n_tasks):
-        feat = model.return_hidden(test_xs[test_task])
-        #acc  = knn_classifier(train_feats, train_ys, feat, test_ys[test_task], num_classes=args.n_classes)[0]
-        acc  = knn_classifier(train_feats, buffer.by, feat, test_ys[test_task], num_classes=args.n_classes)[0]
-        knns += [acc]
-
-    print([f'{x:.2f}' for x in knns], np.mean(knns))
-
-model.train()
-
+        wandb.log(to_log)
