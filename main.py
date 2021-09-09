@@ -126,6 +126,10 @@ n_params = sum(np.prod(p.size()) for p in model.parameters())
 buffer = agent.buffer
 not_added = buffer.old_buffer
 
+# --- With unseen points
+from old_buffer import Buffer as OldBuffer
+not_added = OldBuffer(device, 10000, args.input_size)
+
 print(model)
 print("number of classifier parameters:", n_params)
 
@@ -137,13 +141,25 @@ else:
     mode = 'test'
     eval_loader = test_loader
 
+not_added_x, not_added_y = [], []
 test_xs, test_ys = [], []
 for task in range(args.n_tasks):
-    val_loader.sampler.set_task(task)
-    aa, bb = next(iter(val_loader))
-    test_xs += [aa.to(device)]
-    test_ys += [bb.to(device)]
 
+    val_loader.sampler.set_task(task)
+    for i, (aa, bb) in enumerate(val_loader):
+        test_xs += [aa.to(device)]
+        test_ys += [bb.to(device)]
+
+    test_loader.sampler.set_task(task)
+    for i, (aa, bb) in enumerate(test_loader):
+        not_added_x += [aa.to(device)]
+        not_added_y += [bb.to(device)]
+
+not_added.bx = torch.cat(not_added_x)
+not_added.by = torch.cat(not_added_y)
+
+print('not added, ', not_added.by.bincount())
+print('test labels, ', torch.cat(test_ys).bincount())
 
 def measure_drift(model, x, y, proto=None):
     model.eval()
@@ -164,6 +180,54 @@ def measure_drift(model, x, y, proto=None):
 
     model.train()
     return cosine.mean()
+
+
+def measure_proto_drift(hid, y, protos):
+    # let's always compare to the average test proto
+    hid  = F.normalize(hid,  p=2, dim=-1)
+    protos = F.normalize(protos, p=2, dim=-1)
+
+    diff_per_pt = (hid - protos[y]).pow(2).sum(-1)
+    task_0_diff = diff_per_pt[y<2]
+
+    return diff_per_pt.mean().item(), task_0_diff.mean().item()
+
+
+def measure_neg_drift(buf_hid, buf_y, test_hid, test_y):
+    # let's always compare to the average test proto
+    test_hid = F.normalize(test_hid, p=2, dim=-1)
+    buf_hid  = F.normalize(buf_hid,  p=2, dim=-1)
+
+    # get protos
+    protos = [] * test_y.unique().size(0)
+    for label in test_y.unique():
+        out = test_hid[test_y==label].mean(0)
+        protos += [out]
+
+    protos = torch.stack(protos)
+    protos = F.normalize(protos, p=2, dim=-1)
+
+    diff_per_pt = (buf_hid - protos[buf_y]).pow(2).sum(-1)
+    task_0_diff = diff_per_pt[buf_y<2]
+
+    return diff_per_pt.mean().item(), task_0_diff.mean().item()
+
+def measure_neg_drift_nn(buf_hid, buf_y, test_hid, test_y):
+    # let's always compare to the average test proto
+    test_hid = F.normalize(test_hid, p=2, dim=-1)
+    buf_hid  = F.normalize(buf_hid,  p=2, dim=-1)
+
+    diff = (test_hid.unsqueeze(0) - buf_hid.unsqueeze(1)).pow(2).sum(-1) # buf x test
+    same_label = (test_y.unsqueeze(0) - buf_y.unsqueeze(1))
+
+    # for each buff item, take the closest one with the correct label
+    diff = diff.masked_fill(~same_label.bool(), 1e9)
+
+    min_dist = diff.min(1)[0]
+
+    task_0_dist = min_dist[buf_y<2]
+
+    return min_dist.mean().item(), task_0_dist.mean().item()
 
 
 @torch.no_grad()
@@ -295,19 +359,54 @@ for task in range(args.n_tasks):
                 tr_x, tr_y = not_added.bx[idxs], not_added.by[idxs]
                 bf_x, bf_y = buffer.bx, buffer.by
 
-                assert (tr_y.bincount() == bf_y.bincount()).all(), pdb.set_trace()
+                if not (tr_y.bincount() == bf_y.bincount()).all():
+                    print('not same!')
 
                 tr_hid = F.normalize(model.return_hidden(tr_x), p=2, dim=-1)
                 bf_hid = F.normalize(model.return_hidden(bf_x), p=2, dim=-1)
 
+                feats = torch.stack([model.return_hidden(x) for x in test_xs])
+
+                neg_drift, d0 = measure_neg_drift(bf_hid, bf_y, feats.reshape(-1,feats.size(-1)), torch.cat(test_ys))
+                to_log['neg_drift'] = neg_drift
+                to_log['neg_drift_t0'] = d0
+                #neg_drift_nn, n0 = measure_neg_drift_nn(bf_hid, bf_y, feats.reshape(-1,feats.size(-1)), torch.cat(test_ys))
+                #to_log['neg_drift_nn'] = neg_drift_nn
+                #to_log['neg_drift_nn_t0'] = n0
+
+                buf_proto_drift, b0 = measure_proto_drift(bf_hid, bf_y, model.linear.L.weight)
+                to_log['buf_proto_drift'] = buf_proto_drift
+                to_log['buf_proto_drift_0'] = b0
+
+                test_proto_drift, t0 = measure_proto_drift(feats.reshape(-1, feats.size(-1)), torch.cat(test_ys), model.linear.L.weight)
+                to_log['test_proto_drift'] = test_proto_drift
+                to_log['test_proto_drift_0'] = t0
+
+
                 for test_task in range(task + 1):
-                    feat = model.return_hidden(test_xs[test_task])
-                    acc_tr   = knn_classifier(tr_hid,  tr_y,      feat, test_ys[test_task], num_classes=args.n_classes)[0]
-                    acc_buf  = knn_classifier(bf_hid,  buffer.by, feat, test_ys[test_task], num_classes=args.n_classes)[0]
-                    knns_tr += [acc_tr]
-                    knns_buf += [acc_buf]
-                    to_log[f'knn_not_buffer_{test_task}'] =  acc_tr
-                    to_log[f'knn_buffer_{test_task}']     =  acc_buf
+                    feat = feats[test_task]
+                    try:
+                        acc_tr   = knn_classifier(tr_hid,  tr_y, feat, test_ys[test_task], num_classes=args.n_classes)[0]
+                        acc_buf  = knn_classifier(bf_hid,  bf_y, feat, test_ys[test_task], num_classes=args.n_classes)[0]
+                        knns_tr += [acc_tr]
+                        knns_buf += [acc_buf]
+                        to_log[f'knn_not_buffer_{test_task}'] =  acc_tr
+                        to_log[f'knn_buffer_{test_task}']     =  acc_buf
+                    except:
+                        pass
+
+                    try:
+                        te_y = test_ys[test_task]
+                        tr_idx = (tr_y >= test_task * args.n_classes_per_task) & (tr_y < (test_task+1) * args.n_classes_per_task)
+                        bf_idx = (bf_y >= test_task * args.n_classes_per_task) & (bf_y < (test_task+1) * args.n_classes_per_task)
+
+                        acc_tr   = knn_classifier(tr_hid[tr_idx], tr_y[tr_idx], feat, test_ys[test_task], num_classes=args.n_classes)[0]
+                        acc_buf  = knn_classifier(bf_hid[bf_idx],  bf_y[bf_idx], feat, test_ys[test_task], num_classes=args.n_classes)[0]
+                        to_log[f'MHknn_not_buffer_{test_task}'] =  acc_tr
+                        to_log[f'MHknn_buffer_{test_task}']     =  acc_buf
+                    except:
+                        pass
+
 
                 print(i, 'train', [f' {x:.2f}' for x in knns_tr], f'{np.mean(knns_tr):.2f}', '\tbuffer', [f' {x:.2f}' for x in knns_buf], f'{np.mean(knns_buf):.2f}')
 
