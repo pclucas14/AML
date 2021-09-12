@@ -44,7 +44,7 @@ parser.add_argument('--task_free', type=int, default=0)
 parser.add_argument('--use_augs', type=int, default=0)
 parser.add_argument('--samples_per_task', type=int, default=-1)
 parser.add_argument('--mem_size', type=int, default=20, help='controls buffer size')
-parser.add_argument('--eval_every', type=int, default=-1)
+parser.add_argument('--eval_every', type=int, default=1e9)
 parser.add_argument('--run', type=int, default=0)
 parser.add_argument('--validation', type=int, default=1)
 parser.add_argument('--load_best_args', type=int, default=0)
@@ -121,7 +121,6 @@ model.train()
 agent = METHODS[args.method](model, logger, train_tf, args)
 n_params = sum(np.prod(p.size()) for p in model.parameters())
 
-print(model)
 print("number of classifier parameters:", n_params)
 
 eval_accs = []
@@ -211,9 +210,15 @@ for task in range(args.n_tasks):
 
         n_seen += x.size(0)
 
-    # always eval at end of tasks
-    print(f'Task {task} over. took {time.time() - start:.2f} Avg unique label {unique / i}')
-    eval_accs  += [eval_agent(agent, eval_loader, task, mode=mode)]
+        last_iter = (i+1) == len(train_loader)
+
+        if (i + 1) % args.eval_every == 0 or last_iter:
+            print(f'Task {task}. Time {time.time() - start:.2f} Avg unique label {unique / (i+1)}')
+            acc = eval_agent(agent, eval_loader, task, mode=mode)
+            agent.train()
+
+            if last_iter:
+                eval_accs  += [acc]
 
 
 # ----- Final Results ----- #
