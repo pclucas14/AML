@@ -15,6 +15,8 @@ class SSIL(Method):
         self.task = torch.LongTensor([0]).to(self.device)
         self._task_labels = torch.arange(args.n_classes_per_task).to(self.device)
 
+        assert not args.task_free, 'SSIL needs the task id at train time'
+
         self.distill = args.distill_coef > 0
         print(f'distillation {self.distill}')
 
