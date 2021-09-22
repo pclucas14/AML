@@ -18,6 +18,11 @@ class ER_AML(ER):
         self.n_fwd_inc = 0
         self.n_fwd_inc_cnt = 0
 
+        if args.use_minimal_selection:
+            self.sample = self.buffer.sample_minimal_pos_neg
+        else:
+            self.sample = self.buffer.sample_pos_neg
+
 
     @property
     def name(self):
@@ -91,8 +96,9 @@ class ER_AML(ER):
 
         if inc_data['t'] > 0 or (self.args.task_free and len(self.buffer) > 0):
             # do fancy pos neg
+
             pos_x, neg_x, pos_y, neg_y, invalid_idx, n_fwd = \
-                    self.buffer.sample_pos_neg(
+                    self.sample(
                         inc_data,
                         task_free=self.args.task_free,
                         same_task_neg=True
@@ -132,7 +138,7 @@ class ER_AML(ER):
             # do regular training at the start
             loss = self.loss(self.model(inc_data['x']), inc_data['y'])
 
-        self.n_fwd_inc += (n_fwd + inc_data['x'].size(0))
+        self.n_fwd_inc += n_fwd
         self.n_fwd_inc_cnt += 1
 
         return loss

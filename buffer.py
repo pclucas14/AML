@@ -320,7 +320,7 @@ class Buffer(nn.Module):
         pos_idx = torch.multinomial(valid_pos.float().T, 1).squeeze(1)
         neg_idx = torch.multinomial(valid_neg.float().T, 1).squeeze(1)
 
-        n_fwd = torch.stack((pos_idx, neg_idx), 1)[~invalid_idx].unique().size(0)
+        n_fwd = torch.stack((bidx[-x.size(0):], pos_idx, neg_idx), 1)[~invalid_idx].unique().size(0)
 
         return bx[pos_idx], \
                bx[neg_idx], \
@@ -330,5 +330,98 @@ class Buffer(nn.Module):
                n_fwd
 
 
+    def sample_minimal_pos_neg(self, inc_data, task_free=True, same_task_neg=True):
+        """ maximize choosing the incoming data to minimize forward passes """
+
+        x     = inc_data['x']
+        label = inc_data['y']
+        task  = torch.zeros_like(label).fill_(inc_data['t'])
+
+        '''
+        # we need to create an "augmented" buffer containing the incoming data
+        bx   = torch.cat((self.bx[:self.current_index], x))
+        by   = torch.cat((self.by[:self.current_index], label))
+        bt   = torch.cat((self.bt[:self.current_index], task))
+        bidx = torch.arange(bx.size(0)).to(bx.device)
+
+        # buf_size x label_size
+        same_label = label.view(1, -1)             == by.view(-1, 1)
+        same_task  = task.view(1, -1)              == bt.view(-1, 1)
+        same_ex    = bidx[-x.size(0):].view(1, -1) == bidx.view(-1, 1)
+        '''
+
+        bidx = torch.arange(x.size(0)).to(x.device)
+
+        # label_size x label_size
+        same_label = label.view(1, -1)             == label.view(-1, 1)
+        same_task  = task.view(1, -1)              == task.view(-1, 1)
+        same_ex    = bidx.view(1, -1)              == bidx.view(-1, 1)
+
+        task_labels = label.unique()
+        real_same_task = same_task
+
+        # TASK FREE METHOD : instead of using the task ID, we'll use labels in
+        # the current batch to mimic task
+        if task_free:
+            same_task = torch.zeros_like(same_task)
+
+            for label_ in task_labels:
+                label_exp = label_.view(1, -1).expand_as(same_task)
+                same_task = same_task | (label_exp == label.view(-1, 1))
+
+        valid_pos  = same_label & ~same_ex
+
+        if same_task_neg:
+            valid_neg = ~same_label & same_task
+        else:
+            valid_neg = ~same_label
+
+        # remove points which don't have pos, neg from same and diff t
+        has_valid_pos = valid_pos.sum(0) > 0
+        has_valid_neg = valid_neg.sum(0) > 0
+
+        invalid_idx = ~has_valid_pos | ~has_valid_neg
+
+        if invalid_idx.any():
+            # so the fetching operation won't fail
+            valid_pos[:, invalid_idx] = 1
+            valid_neg[:, invalid_idx] = 1
+
+        # easier if invalid_idx is a binary tensor
+        is_invalid = torch.zeros_like(label).bool()
+        is_invalid[invalid_idx] = 1
+
+        # fetch positive samples
+        pos_idx = torch.multinomial(valid_pos.float().T, 1).squeeze(1)
+        neg_idx = torch.multinomial(valid_neg.float().T, 1).squeeze(1)
+
+        # return
+        pos_x, neg_x = x[pos_idx], x[neg_idx]
+        pos_y, neg_y = label[pos_idx], label[neg_idx]
+
+        n_fwd = torch.stack((bidx, pos_idx, neg_idx), 1)[~invalid_idx].unique().size(0)
+
+        # --- handle cases that can be solved by looking into the buffer:
+        if invalid_idx.any():
+            # build new input
+            invalid_data = OrderedDict()
+            invalid_data['x'] = x[invalid_idx]
+            invalid_data['y'] = label[invalid_idx]
+            invalid_data['t'] = inc_data['t']
+
+            n_pos_x, n_neg_x, n_pos_y, n_neg_y, n_is_invalid, n_new_fwd = \
+                    self.sample_pos_neg(invalid_data, task_free=task_free, same_task_neg=same_task_neg)
+
+            # next we fill the invalid indices with their potentially valid points from the buffer
+            pos_x[invalid_idx][~n_is_invalid].data.copy_(n_pos_x[~n_is_invalid])
+            neg_x[invalid_idx][~n_is_invalid].data.copy_(n_neg_x[~n_is_invalid])
+            pos_y[invalid_idx][~n_is_invalid].data.copy_(n_pos_y[~n_is_invalid])
+            neg_y[invalid_idx][~n_is_invalid].data.copy_(n_neg_y[~n_is_invalid])
+
+            invalid_idx[invalid_idx].data.copy_(n_is_invalid)
+
+            n_fwd += n_new_fwd
+
+        return pos_x, neg_x, pos_y, neg_y, is_invalid, n_fwd
 
 

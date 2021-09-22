@@ -62,6 +62,7 @@ parser.add_argument('--margin', type=float, default=0.2)
 parser.add_argument('--buffer_neg', type=float, default=0)
 parser.add_argument('--incoming_neg', type=float, default=2.0)
 parser.add_argument('--supcon_temperature', type=float, default=0.2)
+parser.add_argument('--use_minimal_selection', type=int, default=False)
 
 # ICARL hparams / SS-IL
 parser.add_argument('--distill_coef', type=float, default=0.)
@@ -213,7 +214,7 @@ for task in range(args.n_tasks):
         last_iter = (i+1) == len(train_loader)
 
         if (i + 1) % args.eval_every == 0 or last_iter:
-            print(f'Task {task}. Time {time.time() - start:.2f} Avg unique label {unique / (i+1)}')
+            print(f'Task {task}. Time {time.time() - start:.2f}\tCost {agent.cost}')
             acc = eval_agent(agent, eval_loader, task, mode=mode)
             agent.train()
 
