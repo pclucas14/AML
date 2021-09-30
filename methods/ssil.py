@@ -25,7 +25,8 @@ class SSIL(Method):
             'exclude_task': None if args.task_free else self.task,
         }
 
-        #self.buffer.sample = self.buffer.sample_balanced
+        # HARDCODE
+        self.T = 2 # as in paper
 
     @property
     def name(self):
@@ -57,23 +58,7 @@ class SSIL(Method):
 
         loss     = self.loss(m_pred, data['y'])
 
-        # task-wise distillation loss
-        if self.distill and self.task > 0:
-            ub = self.task_labels.min()
-
-            pred = pred.reshape(-1, self.args.n_tasks, self.args.n_classes_per_task)
-            p, log_p = F.softmax(pred, -1), F.log_softmax(pred, -1)
-
-            with torch.no_grad():
-                tgt_pred  = self._old_model(aug_data)
-                tgt_pred = tgt_pred.reshape(-1, self.args.n_tasks, self.args.n_classes_per_task)
-                tgt_p, tgt_log_p = F.softmax(tgt_pred, -1), F.log_softmax(tgt_pred, -1)
-
-            # distill all but current task
-            out = tgt_p * (tgt_log_p - log_p)
-            out = out.mean(0).sum()
-
-            loss += out
+        # No distillation on the incoming data (of current task)
 
         return loss
 
@@ -95,15 +80,31 @@ class SSIL(Method):
             ub = self.task_labels.min()
 
             pred = pred.reshape(-1, self.args.n_tasks, self.args.n_classes_per_task)
+
+            # distill on PREVIOUS tasks
+            pred = pred[:, :self.task]
+
+            # temperature scaling
+            pred = pred / self.T
+
             p, log_p = F.softmax(pred, -1), F.log_softmax(pred, -1)
 
             with torch.no_grad():
                 tgt_pred  = self._old_model(aug_data)
                 tgt_pred = tgt_pred.reshape(-1, self.args.n_tasks, self.args.n_classes_per_task)
+
+                # keep only previous tasks
+                tgt_pred = tgt_pred[:, :self.task]
+
+                # temperature scaling
+                tgt_pred = tgt_pred / self.T
+
                 tgt_p, tgt_log_p = F.softmax(tgt_pred, -1), F.log_softmax(tgt_pred, -1)
 
             # distill all but current task
-            out = tgt_p * (tgt_log_p - log_p)
+            out = tgt_p * (tgt_log_p - log_p) # bs, n_prev_tasks, n_cls_per_task
+
+            # only average per sample, the rest is summed
             out = out.mean(0).sum()
 
             loss += out
