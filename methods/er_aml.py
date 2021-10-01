@@ -24,6 +24,7 @@ class ER_AML(ER):
             self.sample = self.buffer.sample_pos_neg
 
 
+
     @property
     def name(self):
         args = self.args
@@ -110,7 +111,7 @@ class ER_AML(ER):
             hidden  = self.model.return_hidden(aug_data)
             hidden_norm = normalize(hidden[~invalid_idx])
 
-            all_xs  = torch.cat((pos_x, neg_x))
+            all_xs  = self.train_tf(torch.cat((pos_x, neg_x)))
             all_hid = normalize(self.model.return_hidden(all_xs))
             all_hid = all_hid.reshape(2, pos_x.size(0), -1)
             pos_hid, neg_hid = all_hid[:, ~invalid_idx]
