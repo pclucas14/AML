@@ -1,0 +1,52 @@
+name: 'task_based_sweep'
+project: 'final_final10'
+method: grid
+metric:
+  goal: maximize
+  name: valid/avg_acc
+program: main.py
+
+parameters:
+  nf: 
+    values: 
+    - 64 
+
+  method:
+    values:
+    - er_ace
+    - er 
+  use_augs: 
+    values: 
+    - 0
+    - 1
+  mem_size: 
+    values: 
+    - 5
+    - 20
+    - 100
+  dataset: 
+    values: 
+    - cifar100
+    - miniimagenet
+  run: 
+    values: 
+    - 0 
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+
+  # defaults
+  wandb_log:
+    value: online
+  task_free: 
+    value: 1 
+  validation: 
+    value: 0
+  load_best_args: 
+    value: 1
