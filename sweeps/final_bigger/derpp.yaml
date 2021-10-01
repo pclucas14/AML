@@ -1,4 +1,4 @@
-name: 'task_based_sweep'
+name: 'bigger_model'
 project: 'final_final10'
 method: grid
 metric:
