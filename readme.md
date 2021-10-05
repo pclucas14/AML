@@ -1,4 +1,4 @@
-## Reducing Representation Drift in Online Continual Learning
+## New Insights on Reducing Drastic Representation Drift in Online Continual Learning
 
 Avoiding disrupting learned representations when new classes are introduced </br>
 
