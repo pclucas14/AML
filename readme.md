@@ -44,12 +44,4 @@ Logging is done with [Weights & Biases](https://www.wandb.com/) and can be turne
 python -dataset <dataset> --method <method> --wandb_log online --wandb_entity <wandb username>
 ```
 
-## Cite
-```
-@article{caccia2021reducing,
-  title={Reducing Representation Drift in Online Continual Learning},
-  author={Caccia, Lucas and Aljundi, Rahaf and Tuytelaars, Tinne and Pineau, Joelle and Belilovsky, Eugene},
-  journal={arXiv preprint arXiv:2104.05025},
-  year={2021}
-}
-```
+
