@@ -1,7 +1,5 @@
 ## Reducing Representation Drift in Online Continual Learning
 
-[![Paper](https://img.shields.io/badge/arXiv-2104.05025-brightgreen)](https://arxiv.org/abs/2104.05025)
-
 Avoiding disrupting learned representations when new classes are introduced </br>
 
 ## (key) Requirements 
