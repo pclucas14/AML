@@ -59,18 +59,26 @@ tensor([[0, 0, 1, 1],
         [0, 0, 1, 1],
         [0, 0, 1, 1]], device='cuda:0', dtype=torch.int32)
 
-def incoming_loss(inc_data, model):
+def incoming_loss(inc_data, model, buffer):
     present = inc_data['y'].unique()
 
-    # process data
-    logits = self.model(inc_data['x'])
-    mask   = torch.zeros_like(logits)
-
-    # unmask current classes
-    mask[:, present] = 1
-
-    # apply mask
-    logits  = logits.masked_fill(mask == 0, -1e9)
+    # get features (penultimate layer)
+    features = model.before_logits(inc_data['x'])
     
-    return F.cross_entropy(logits, inc_data['y'])
-
+    # get positive points
+    pos_features = get_positives(source=(inc_data, buffer))
+    
+    """ Regular SupCon Loss """
+    # get (any) negative points
+    # neg_features = get_positives(source=inc_data, buffer))
+    
+    # get same-task negatives
+    same_task_buffer = buffer[buffer.label.isin(present)]
+    neg_features = get_negatives(source=(inc_data, same_task_buffer))
+    
+    return SupervisedContrastiveLoss(
+        anchor=features, 
+        positive=pos_features, 
+        negative=neg_features
+    )
+    
