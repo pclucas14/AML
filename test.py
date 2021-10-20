@@ -20,5 +20,4 @@ for (new_x, new_y) in stream:
 
     optimizer(model, loss)
 
-
     buffer.add(new_x, new_y)
