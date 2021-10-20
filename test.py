@@ -59,15 +59,32 @@ tensor([[0, 0, 1, 1],
         [0, 0, 1, 1],
         [0, 0, 1, 1]], device='cuda:0', dtype=torch.int32)
 
-present = inc_data['y'].unique()
+def incoming_loss(inc_data, model):
+    present = inc_data['y'].unique()
 
-# process data
-logits = self.model(inc_data['x'])
-mask   = torch.zeros_like(logits)
+    # process data
+    logits = self.model(inc_data['x'])
+    mask   = torch.zeros_like(logits)
 
-# unmask current classes
-mask[:, present] = 1
+    # unmask current classes
+    mask[:, present] = 1
 
-# apply mask
-logits  = logits.masked_fill(mask == 0, -1e9)
+    # apply mask
+    logits  = logits.masked_fill(mask == 0, -1e9)
+    
+    return F.cross_entropy(logits, inc_data['y'])
+
+
+def incoming_loss(inc_data, model, buffer):
+
+    
+    
+
+    # unmask current classes
+    mask[:, present] = 1
+
+    # apply mask
+    logits  = logits.masked_fill(mask == 0, -1e9)
+    
+    return F.cross_entropy(logits, inc_data['y'])
 
