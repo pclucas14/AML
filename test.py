@@ -58,3 +58,16 @@ tensor([[0, 0, 1, 1],
         [0, 0, 1, 1],
         [0, 0, 1, 1],
         [0, 0, 1, 1]], device='cuda:0', dtype=torch.int32)
+
+present = inc_data['y'].unique()
+
+# process data
+logits = self.model(inc_data['x'])
+mask   = torch.zeros_like(logits)
+
+# unmask current classes
+mask[:, present] = 1
+
+# apply mask
+logits  = logits.masked_fill(mask == 0, -1e9)
+
