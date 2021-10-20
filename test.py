@@ -68,13 +68,12 @@ def incoming_loss(inc_data, model, buffer):
     # get positive points
     pos_features = get_positives(source=(inc_data, buffer))
     
-    """ Regular SupCon Loss """
-    # get (any) negative points
-    # neg_features = get_positives(source=inc_data, buffer))
-    
     # get same-task negatives
     same_task_buffer = buffer[buffer.label.isin(present)]
     neg_features = get_negatives(source=(inc_data, same_task_buffer))
+    
+    # regular SupCon Loss would do this
+    # neg_features = get_positives(source=inc_data, buffer))
     
     return SupervisedContrastiveLoss(
         anchor=features, 
