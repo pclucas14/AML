@@ -74,17 +74,3 @@ def incoming_loss(inc_data, model):
     
     return F.cross_entropy(logits, inc_data['y'])
 
-
-def incoming_loss(inc_data, model, buffer):
-
-    
-    
-
-    # unmask current classes
-    mask[:, present] = 1
-
-    # apply mask
-    logits  = logits.masked_fill(mask == 0, -1e9)
-    
-    return F.cross_entropy(logits, inc_data['y'])
-
